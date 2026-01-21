@@ -63,33 +63,38 @@ def _fetch_scheme(scheme: str) -> dict[str, dict]:
     return terms
 
 
-def _ensure_scheme_cached(scheme: str) -> bool:
+def _ensure_scheme_cached(scheme: str) -> dict[str, dict] | None:
     """
-    Ensure a KMS scheme is cached in Redis.
+    Ensure a KMS scheme is cached in Redis, or fetch it.
 
     Returns:
-        True if scheme is cached (or caching succeeded), False on error
+        {} (empty dict) if scheme is already cached
+        None on fetch errors or empty terms
+        dict of fetched terms if fetch succeeded (whether or not caching worked)
     """
     cache = get_cache_client()
 
     # Check if already cached
     cache_key = _get_scheme_cache_key(scheme)
     if cache.hexists(cache_key):
-        return True
+        return {}
 
-    # Fetch and cache the entire scheme
+    # Fetch the entire scheme
     try:
         terms = _fetch_scheme(scheme)
     except (requests.RequestException, ValueError) as e:
         logger.warning("Failed to fetch KMS scheme '%s': %s", scheme, e)
-        return False
+        return None
 
     if not terms:
         logger.warning("KMS scheme '%s' returned no terms", scheme)
-        return False
+        return None
 
-    # Store in Redis HASH
-    return cache.hmset(cache_key, terms, ttl=KMS_CACHE_TTL)
+    # Attempt to cache - but return terms regardless of cache success
+    if not cache.hmset(cache_key, terms, ttl=KMS_CACHE_TTL):
+        logger.warning("Failed to cache KMS scheme '%s', serving from fetch", scheme)
+
+    return terms
 
 
 def lookup_term(term: str, scheme: str) -> KMSTerm | None:
@@ -135,21 +140,28 @@ def lookup_terms(terms: list[tuple[str, str]]) -> dict[tuple[str, str], KMSTerm 
 
     # Process each scheme
     for scheme, scheme_terms in by_scheme.items():
-        # Ensure scheme is cached
-        if not _ensure_scheme_cached(scheme):
-            # Failed to cache - mark all terms from this scheme as not found
+        # Ensure scheme is cached or fetched
+        scheme_data = _ensure_scheme_cached(scheme)
+
+        if scheme_data is None:
+            # Failed to fetch - mark all terms from this scheme as not found
             for term in scheme_terms:
                 results[(term, scheme)] = None
             continue
 
-        # Batch lookup from cached HASH
-        cache_key = _get_scheme_cache_key(scheme)
         fields = [t.upper() for t in scheme_terms]
-        cached_values = cache.hmget(cache_key, fields)
+
+        if scheme_data:
+            # Use freshly fetched data directly
+            term_values = scheme_data
+        else:
+            # Scheme is cached - batch lookup from Redis HASH
+            cache_key = _get_scheme_cache_key(scheme)
+            term_values = cache.hmget(cache_key, fields)
 
         # Map results back to original terms
         for term, upper_term in zip(scheme_terms, fields, strict=True):
-            cached = cached_values.get(upper_term)
+            cached = term_values.get(upper_term)
             if cached:
                 results[(term, scheme)] = KMSTerm(
                     uuid=cached["uuid"],

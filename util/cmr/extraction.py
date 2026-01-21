@@ -5,13 +5,10 @@ Extracts text chunks and KMS term references from UMM metadata
 for collections, variables, and citations.
 """
 
-import logging
 from typing import Any
 
 from util.cmr.client import CMRError
 from util.models import ConceptMessage, EmbeddingChunk, ExtractionResult, KMSTerm
-
-logger = logging.getLogger(__name__)
 
 # Field mappings: UMM field names -> attribute names for each concept type
 COLLECTION_FIELDS = {"EntryTitle": "title", "Abstract": "abstract"}
@@ -124,11 +121,7 @@ def extract_data(message: ConceptMessage, metadata: dict[str, Any]) -> Extractio
         "variable": extract_from_variable,
         "citation": extract_from_citation,
     }
-    extractor = extractors.get(message.concept_type)
-    if not extractor:
-        logger.warning("Unknown concept type: %s", message.concept_type)
-        return ExtractionResult()
-
+    extractor = extractors[message.concept_type]
     return extractor(message.concept_id, metadata)
 
 

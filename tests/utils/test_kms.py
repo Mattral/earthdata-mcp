@@ -217,6 +217,40 @@ class TestLookupTerms:
             assert results[("ASTER", "instruments")].uuid == "cached-aster"
             mock_get.assert_not_called()
 
+    def test_returns_fetched_data_when_caching_fails(self):
+        """Should return fetched data even when cache.hmset fails."""
+        cache = MagicMock()
+        cache.hexists.return_value = False  # Not cached
+        cache.hmset.return_value = False  # Caching fails
+
+        scheme_response = {
+            "concepts": [
+                {
+                    "prefLabel": "MODIS",
+                    "uuid": "fetched-modis",
+                    "definitions": [{"text": "MODIS definition"}],
+                },
+            ]
+        }
+
+        with (
+            patch("util.kms.client.get_cache_client", return_value=cache),
+            patch("util.kms.client.requests.get") as mock_get,
+        ):
+            response_mock = MagicMock(status_code=200)
+            response_mock.json.return_value = scheme_response
+            response_mock.raise_for_status = MagicMock()
+            mock_get.return_value = response_mock
+
+            results = lookup_terms([("MODIS", "instruments")])
+
+            # Should still return the fetched data
+            assert results[("MODIS", "instruments")] is not None
+            assert results[("MODIS", "instruments")].uuid == "fetched-modis"
+            assert results[("MODIS", "instruments")].term == "MODIS"
+            # Verify caching was attempted
+            cache.hmset.assert_called_once()
+
 
 class TestClearCache:
     """Tests for clear_cache function."""

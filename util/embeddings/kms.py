@@ -75,12 +75,13 @@ class KMSEnrichedEmbeddingGenerator(EmbeddingGenerator):
             concept_type: Concept type for the base generator.
             attribute: Attribute name for the base generator.
             span: Optional Langfuse span for observability.
+            metadata: Optional metadata dict for Langfuse generation tracking.
 
         Returns:
             Embedding vector from the base generator.
         """
         enriched_text = self._enrich_text(text)
-        return self._base.generate(enriched_text, concept_type, attribute, span)
+        return self._base.generate(enriched_text, concept_type, attribute, span, metadata)
 
     def _enrich_text(self, text: str) -> str:
         """Enrich text by looking up and appending KMS definitions."""
