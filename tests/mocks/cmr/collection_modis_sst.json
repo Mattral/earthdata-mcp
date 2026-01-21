@@ -1,7 +1,6 @@
 {
   "EntryTitle": "MODIS/Terra Sea Surface Temperature Daily L3 Global 4km",
   "Abstract": "Daily global sea surface temperature measurements from the MODIS instrument aboard the Terra satellite. This dataset provides high-resolution thermal observations of the ocean surface.",
-  "Purpose": "Climate monitoring and oceanographic research",
   "ScienceKeywords": [
     {
       "Category": "EARTH SCIENCE",

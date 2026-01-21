@@ -38,44 +38,46 @@ class TestSearchCmr:
 
         results = list(search_cmr("collection", {}, page_size=100))
 
-        assert len(results) == 1  # One page of results
+        assert len(results) == 1
         assert len(results[0]) == 2
         assert results[0][0]["meta"]["concept-id"] == "C1234-PROV"
 
     @responses.activate
     def test_search_cmr_paginates(self):
-        """Test that search_cmr handles pagination."""
-        # First page
+        """Test that search_cmr handles pagination using CMR-Search-After."""
         responses.add(
             responses.GET,
             "https://cmr.earthdata.nasa.gov/search/collections.umm_json",
             json={
-                "hits": 3,
                 "items": [
                     {"meta": {"concept-id": "C1-PROV", "revision-id": 1}},
                     {"meta": {"concept-id": "C2-PROV", "revision-id": 1}},
                 ],
             },
+            headers={"CMR-Hits": "3", "CMR-Search-After": '["token123"]'},
             status=200,
         )
-        # Second page
+
         responses.add(
             responses.GET,
             "https://cmr.earthdata.nasa.gov/search/collections.umm_json",
             json={
-                "hits": 3,
                 "items": [
                     {"meta": {"concept-id": "C3-PROV", "revision-id": 1}},
                 ],
             },
+            headers={"CMR-Hits": "3"},
             status=200,
         )
 
         results = list(search_cmr("collection", {}, page_size=2))
 
-        assert len(results) == 2  # Two pages
+        assert len(results) == 2
         assert len(results[0]) == 2
         assert len(results[1]) == 1
+
+        # Verify second request included search-after header
+        assert responses.calls[1].request.headers.get("CMR-Search-After") == '["token123"]'
 
     @responses.activate
     def test_search_cmr_stops_on_empty(self):
@@ -172,6 +174,60 @@ class TestSendToQueue:
 
         assert sent == 2
         mock_sqs.send_message_batch.assert_called_once()
+
+    def test_includes_langfuse_session_id_in_message_attributes(self, mocker):
+        """Test that session_id is included as LangfuseSessionId message attribute."""
+        mock_sqs = mocker.MagicMock()
+        mocker.patch("util.sqs._client", mock_sqs)
+        mock_sqs.send_message_batch.return_value = {
+            "Successful": [{"Id": "0"}],
+            "Failed": [],
+        }
+
+        messages = [
+            {
+                "concept-type": "collection",
+                "concept-id": "C1234-PROV",
+                "revision-id": 1,
+                "action": "concept-update",
+            },
+        ]
+
+        send_to_queue("https://sqs.example.com/queue", messages, session_id="bootstrap-abc123")
+
+        # Verify the message attributes were included
+        call_args = mock_sqs.send_message_batch.call_args
+        entries = call_args.kwargs["Entries"]
+        assert len(entries) == 1
+        assert "MessageAttributes" in entries[0]
+        assert entries[0]["MessageAttributes"]["LangfuseSessionId"] == {
+            "DataType": "String",
+            "StringValue": "bootstrap-abc123",
+        }
+
+    def test_omits_message_attributes_when_no_session_id(self, mocker):
+        """Test that message attributes are not included when session_id is None."""
+        mock_sqs = mocker.MagicMock()
+        mocker.patch("util.sqs._client", mock_sqs)
+        mock_sqs.send_message_batch.return_value = {
+            "Successful": [{"Id": "0"}],
+            "Failed": [],
+        }
+
+        messages = [
+            {
+                "concept-type": "collection",
+                "concept-id": "C1234-PROV",
+                "revision-id": 1,
+                "action": "concept-update",
+            },
+        ]
+
+        send_to_queue("https://sqs.example.com/queue", messages)
+
+        call_args = mock_sqs.send_message_batch.call_args
+        entries = call_args.kwargs["Entries"]
+        assert "MessageAttributes" not in entries[0]
 
     def test_batches_messages(self, mocker):
         """Test that messages are batched (max 10 per batch)."""
@@ -283,13 +339,12 @@ class TestHandler:
             status=200,
         )
 
-        # Minimal event - should use defaults
         event = {}
 
         result = handler(event, None)
 
-        assert result["concept_type"] == "collection"  # default
-        assert result["dry_run"] is False  # default
+        assert result["concept_type"] == "collection"
+        assert result["dry_run"] is False
 
     @responses.activate
     def test_handler_processes_variables(self, mocker):
@@ -348,3 +403,70 @@ class TestHandler:
 
         assert result["concept_type"] == "citation"
         assert result["total_processed"] == 1
+
+    @responses.activate
+    def test_handler_returns_langfuse_session_id(self, mocker):
+        """Test handler generates and returns a Langfuse session ID."""
+        mock_sqs = mocker.MagicMock()
+        mocker.patch("util.sqs._client", mock_sqs)
+        mock_sqs.send_message_batch.return_value = {
+            "Successful": [{"Id": "0"}],
+            "Failed": [],
+        }
+
+        responses.add(
+            responses.GET,
+            "https://cmr.earthdata.nasa.gov/search/collections.umm_json",
+            json={
+                "hits": 1,
+                "items": [
+                    {"meta": {"concept-id": "C1234-PROV", "revision-id": 1}},
+                ],
+            },
+            status=200,
+        )
+
+        event = {"concept_type": "collection"}
+
+        result = handler(event, None)
+
+        # Session ID should be returned and follow the expected format
+        assert "langfuse_session_id" in result
+        assert result["langfuse_session_id"].startswith("bootstrap-")
+        assert len(result["langfuse_session_id"]) == len("bootstrap-") + 8
+
+    @responses.activate
+    def test_handler_passes_session_id_to_sqs_messages(self, mocker):
+        """Test handler passes the session ID to SQS message attributes."""
+        mock_sqs = mocker.MagicMock()
+        mocker.patch("util.sqs._client", mock_sqs)
+        mock_sqs.send_message_batch.return_value = {
+            "Successful": [{"Id": "0"}],
+            "Failed": [],
+        }
+
+        responses.add(
+            responses.GET,
+            "https://cmr.earthdata.nasa.gov/search/collections.umm_json",
+            json={
+                "hits": 1,
+                "items": [
+                    {"meta": {"concept-id": "C1234-PROV", "revision-id": 1}},
+                ],
+            },
+            status=200,
+        )
+
+        event = {"concept_type": "collection"}
+
+        result = handler(event, None)
+
+        # Verify SQS messages include the session ID in attributes
+        call_args = mock_sqs.send_message_batch.call_args
+        entries = call_args.kwargs["Entries"]
+        assert "MessageAttributes" in entries[0]
+        assert "LangfuseSessionId" in entries[0]["MessageAttributes"]
+        assert (
+            entries[0]["MessageAttributes"]["LangfuseSessionId"]["StringValue"]
+            == result["langfuse_session_id"]
+        )

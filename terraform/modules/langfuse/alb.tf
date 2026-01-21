@@ -38,9 +38,6 @@ resource "aws_lb_listener_rule" "langfuse" {
   }
 }
 
-data "aws_lb" "lb_name" {
-  name = "cmr-services-${var.environment_name}"
-}
 resource "aws_lb_target_group" "langfuse_worker" {
    name        = "${var.environment_name}-langfuse-worker"
   port        = 3030
@@ -50,7 +47,7 @@ resource "aws_lb_target_group" "langfuse_worker" {
 }
 
 resource "aws_lb_listener" "langfuse-worker" {
-  load_balancer_arn = data.aws_lb.lb_name.arn
+  load_balancer_arn = var.load_balancer_arn
   port              = 3030  # Different port for worker
   protocol          = "HTTP"
 

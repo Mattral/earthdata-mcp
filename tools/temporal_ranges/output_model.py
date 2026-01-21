@@ -42,7 +42,7 @@ class TemporalRangeOutput(BaseModel):
                     "StartDate": "2024-06-01T00:00:00+00:00",
                     "EndDate": "2024-08-31T23:59:59+00:00",
                     "reasoning": (
-                        "Query refers to summer 2024, " "interpreted as June 1st to August 31st"
+                        "Query refers to summer 2024, interpreted as June 1st to August 31st"
                     ),
                 },
                 {

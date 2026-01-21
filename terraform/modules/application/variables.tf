@@ -53,19 +53,6 @@ variable "cmr_url" {
   default     = "https://cmr.earthdata.nasa.gov"
 }
 
-# Bedrock
-variable "embedding_model" {
-  description = "Bedrock embedding model ID"
-  type        = string
-  default     = "amazon.titan-embed-text-v2:0"
-}
-
-variable "bedrock_region" {
-  description = "AWS region for Bedrock"
-  type        = string
-  default     = "us-east-1"
-}
-
 # Lambda configuration
 variable "ingest_lambda_timeout" {
   description = "Timeout for ingest lambda in seconds"
@@ -100,7 +87,7 @@ variable "embedding_lambda_memory" {
 variable "embedding_lambda_concurrency" {
   description = "Reserved concurrent executions for embedding lambda"
   type        = number
-  default     = 50
+  default     = 10
 }
 
 variable "bootstrap_lambda_timeout" {
@@ -118,25 +105,13 @@ variable "bootstrap_lambda_memory" {
 variable "embeddings_table" {
   description = "Name of the embeddings table in PostgreSQL"
   type        = string
-  default     = "concept_embeddings"
+  default     = "embeddings"
 }
 
 variable "associations_table" {
-  description = "Name of the concept associations table in PostgreSQL"
+  description = "Name of the associations table in PostgreSQL"
   type        = string
-  default     = "concept_associations"
-}
-
-variable "kms_embeddings_table" {
-  description = "Name of the KMS embeddings table in PostgreSQL"
-  type        = string
-  default     = "kms_embeddings"
-}
-
-variable "kms_associations_table" {
-  description = "Name of the concept-KMS associations table in PostgreSQL"
-  type        = string
-  default     = "concept_kms_associations"
+  default     = "associations"
 }
 
 variable "langfuse_host" {
@@ -196,6 +171,12 @@ variable "mcp_listener_priority" {
   description = "Priority for MCP ALB listener rule"
   type        = number
   default     = 200
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache node type for Redis"
+  type        = string
+  default     = "cache.t3.micro"
 }
 
 variable "tags" {

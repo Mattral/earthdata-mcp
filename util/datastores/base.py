@@ -16,18 +16,18 @@ class EmbeddingDatastore(ABC):
     @abstractmethod
     def upsert_chunks(
         self,
-        concept_type: ConceptType,
-        concept_id: str,
+        entity_type: ConceptType | str,
+        external_id: str,
         chunks: list[tuple[str, str, list[float]]],  # (attribute, text_content, embedding)
     ) -> int:
         """
-        Insert or update embedding chunks for a concept.
+        Insert or update embedding chunks for an entity.
 
-        Replaces all existing chunks for the concept with the new ones.
+        Replaces all existing chunks for the entity with the new ones.
 
         Args:
-            concept_type: Type of concept (collection, variable, service, citation).
-            concept_id: CMR concept ID.
+            entity_type: Type of entity (collection, variable, citation, instrument, etc.).
+            external_id: External identifier (concept ID or KMS UUID).
             chunks: List of (attribute, text_content, embedding) tuples.
 
         Returns:
@@ -35,12 +35,12 @@ class EmbeddingDatastore(ABC):
         """
 
     @abstractmethod
-    def delete_chunks(self, concept_id: str) -> int:
+    def delete_chunks(self, external_id: str) -> int:
         """
-        Delete all embedding chunks for a concept.
+        Delete all embedding chunks for an entity.
 
         Args:
-            concept_id: CMR concept ID.
+            external_id: External identifier.
 
         Returns:
             Number of chunks deleted.
@@ -49,17 +49,17 @@ class EmbeddingDatastore(ABC):
     @abstractmethod
     def upsert_associations(
         self,
-        concept_type: ConceptType,
-        concept_id: str,
+        left_type: ConceptType | str,
+        left_id: str,
         associations: dict[str, list[str]],
     ) -> int:
         """
-        Store concept associations.
+        Store associations between entities.
 
         Args:
-            concept_type: Type of the source concept.
-            concept_id: CMR concept ID of the source.
-            associations: Dict mapping association types to lists of concept IDs.
+            left_type: Type of the source entity.
+            left_id: External ID of the source.
+            associations: Dict mapping association types to lists of IDs.
                          e.g., {"variables": ["V123-PROV"], "citations": ["CIT456-PROV"]}
 
         Returns:
@@ -67,12 +67,12 @@ class EmbeddingDatastore(ABC):
         """
 
     @abstractmethod
-    def delete_associations(self, concept_id: str) -> int:
+    def delete_associations(self, external_id: str) -> int:
         """
-        Delete all associations where this concept is involved.
+        Delete all associations where this entity is involved.
 
         Args:
-            concept_id: CMR concept ID.
+            external_id: External identifier.
 
         Returns:
             Number of associations deleted.
@@ -92,7 +92,7 @@ class EmbeddingDatastore(ABC):
         self,
         embedding: list[float],
         limit: int = 10,
-        concept_type: ConceptType | None = None,
+        entity_type: ConceptType | str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search for similar embeddings.
@@ -100,7 +100,7 @@ class EmbeddingDatastore(ABC):
         Args:
             embedding: Query embedding vector.
             limit: Maximum number of results.
-            concept_type: Optional filter by concept type.
+            entity_type: Optional filter by entity type.
 
         Returns:
             List of matching chunks with similarity scores.
@@ -115,7 +115,7 @@ class EmbeddingDatastore(ABC):
             kms_uuid: The KMS UUID.
 
         Returns:
-            Dict with kms_uuid, scheme, term, definition, embedding, or None if not found.
+            Dict with type, external_id, attribute, text_content, embedding, or None if not found.
         """
 
     @abstractmethod
@@ -131,42 +131,42 @@ class EmbeddingDatastore(ABC):
         Insert or update a KMS term embedding.
 
         Args:
-            kms_uuid: The KMS UUID (primary key).
+            kms_uuid: The KMS UUID (used as external_id).
             scheme: KMS scheme (platforms, instruments, sciencekeywords).
             term: The term/prefLabel.
             definition: Definition from KMS.
             embedding: Embedding vector.
 
         Returns:
-            True if inserted, False if updated.
+            True if inserted, False if already existed.
         """
 
     @abstractmethod
-    def upsert_concept_kms_associations(
+    def upsert_kms_associations(
         self,
-        concept_type: ConceptType,
-        concept_id: str,
-        kms_uuids: list[str],
+        left_type: ConceptType | str,
+        left_id: str,
+        kms_refs: list[tuple[str, str]],  # List of (kms_uuid, scheme)
     ) -> int:
         """
-        Link a concept to KMS terms.
+        Link an entity to KMS terms.
 
         Args:
-            concept_type: Type of concept (collection, variable, citation).
-            concept_id: CMR concept ID.
-            kms_uuids: List of KMS UUIDs to associate.
+            left_type: Type of entity (collection, variable, citation).
+            left_id: External ID.
+            kms_refs: List of (kms_uuid, scheme) tuples to associate.
 
         Returns:
             Number of associations created.
         """
 
     @abstractmethod
-    def delete_concept_kms_associations(self, concept_id: str) -> int:
+    def delete_kms_associations(self, external_id: str) -> int:
         """
-        Delete all KMS associations for a concept.
+        Delete all KMS associations for an entity.
 
         Args:
-            concept_id: CMR concept ID.
+            external_id: External identifier.
 
         Returns:
             Number of associations deleted.

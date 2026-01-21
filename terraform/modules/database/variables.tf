@@ -52,13 +52,13 @@ variable "engine_version" {
 variable "database_name" {
   description = "Name of the default database"
   type        = string
-  default     = "earthdata"
+  default     = "earthdata_mcp"
 }
 
 variable "master_username" {
   description = "Master username for the database"
   type        = string
-  default     = "earthdata_admin"
+  default     = "earthdata_mcp"
 }
 
 variable "backup_retention_period" {
@@ -83,4 +83,27 @@ variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
   default     = {}
+}
+
+variable "availability_zone" {
+  description = "Availability zone for the RDS instance"
+  type        = string
+}
+
+# Migration Lambda
+variable "migration_lambda_image" {
+  description = "ECR image URI for migration lambda"
+  type        = string
+}
+
+variable "migration_lambda_timeout" {
+  description = "Timeout for migration lambda in seconds"
+  type        = number
+  default     = 300
+}
+
+variable "migration_lambda_memory" {
+  description = "Memory for migration lambda in MB"
+  type        = number
+  default     = 256
 }

@@ -61,17 +61,14 @@ resource "aws_lambda_function" "embedding" {
 
   environment {
     variables = {
-      ENVIRONMENT_NAME       = var.environment_name
-      CMR_URL                = var.cmr_url
-      DATABASE_SECRET_ID     = var.database_secret_arn
-      EMBEDDINGS_TABLE       = var.embeddings_table
-      ASSOCIATIONS_TABLE     = var.associations_table
-      KMS_EMBEDDINGS_TABLE   = var.kms_embeddings_table
-      KMS_ASSOCIATIONS_TABLE = var.kms_associations_table
-      EMBEDDING_MODEL        = var.embedding_model
-      BEDROCK_REGION         = var.bedrock_region
-      LANGFUSE_HOST          = var.langfuse_host
-      LANGFUSE_PUBLIC_KEY    = var.langfuse_public_key
+      ENVIRONMENT_NAME    = var.environment_name
+      CMR_URL             = var.cmr_url
+      DATABASE_SECRET_ID  = var.database_secret_arn
+      EMBEDDINGS_TABLE    = var.embeddings_table
+      ASSOCIATIONS_TABLE  = var.associations_table
+      LANGFUSE_BASE_URL   = var.langfuse_host
+      LANGFUSE_PUBLIC_KEY = var.langfuse_public_key
+      REDIS_SECRET_ID     = aws_secretsmanager_secret.redis.arn
     }
   }
 
@@ -90,7 +87,7 @@ resource "aws_lambda_function" "embedding" {
 resource "aws_lambda_event_source_mapping" "embedding" {
   event_source_arn = aws_sqs_queue.embedding.arn
   function_name    = aws_lambda_function.embedding.arn
-  batch_size       = 1
+  batch_size       = 10
 
   function_response_types = ["ReportBatchItemFailures"]
 

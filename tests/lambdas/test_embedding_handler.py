@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Tests for the embedding lambda handler."""
 
 import json
@@ -12,14 +13,13 @@ from lambdas.embedding.handler import (
     handle_update,
     handler,
     process_kms_terms,
+    process_message,
 )
-from util.cmr import (
-    CMRError,
-    extract_data,
+from util.cmr import CMRError, extract_data, fetch_concept
+from util.cmr.extraction import (
     extract_from_citation,
     extract_from_collection,
     extract_from_variable,
-    fetch_concept,
 )
 from util.datastores.postgres import PostgresEmbeddingDatastore
 from util.embeddings import BedrockEmbeddingGenerator
@@ -32,49 +32,68 @@ def set_env(monkeypatch):
     monkeypatch.setenv("CMR_URL", "https://cmr.earthdata.nasa.gov")
     monkeypatch.setenv("DATABASE_SECRET_ID", "test-secret")
     monkeypatch.setenv("EMBEDDINGS_TABLE", "concept_embeddings")
-    monkeypatch.setenv("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
-    monkeypatch.setenv("BEDROCK_REGION", "us-east-1")
+
+
+# Test text that meets the 200 character minimum for embedding
+LONG_TITLE = (
+    "Global Sea Surface Temperature Analysis from Multiple Satellite Sensors "
+    "Providing Comprehensive Coverage of Ocean Temperature Patterns and Variability "
+    "Across All Major Ocean Basins for Climate Research Applications"
+)
+LONG_ABSTRACT = (
+    "This dataset provides comprehensive measurements of sea surface temperature "
+    "collected from multiple satellite-based sensors. The data enables researchers "
+    "to study ocean temperature patterns, climate variability, and long-term trends "
+    "in global ocean heat content with high spatial and temporal resolution."
+)
+LONG_DEFINITION = (
+    "The temperature of the ocean surface water measured by satellite-based infrared "
+    "and microwave sensors. This variable represents the skin temperature of the ocean "
+    "within the top few millimeters and is used for climate monitoring and weather prediction."
+)
 
 
 class TestExtractCollectionData:
     """Tests for extract_from_collection function."""
 
     def test_extracts_title(self):
-        """Test that title is extracted as a chunk."""
-
-        collection = {"EntryTitle": "Test Collection Title"}
+        """Test that title is extracted as a chunk when >= 200 chars."""
+        collection = {"EntryTitle": LONG_TITLE}
 
         result = extract_from_collection("C1234-PROV", collection)
 
         assert len(result.chunks) == 1
         assert result.chunks[0].attribute == "title"
-        assert result.chunks[0].text_content == "Test Collection Title"
 
     def test_extracts_abstract(self):
-        """Test that abstract is extracted as a chunk."""
-
-        collection = {"Abstract": "This is the abstract text."}
+        """Test that abstract is extracted as a chunk when >= 200 chars."""
+        collection = {"Abstract": LONG_ABSTRACT}
 
         result = extract_from_collection("C1234-PROV", collection)
 
         assert len(result.chunks) == 1
         assert result.chunks[0].attribute == "abstract"
-        assert result.chunks[0].text_content == "This is the abstract text."
+
+    def test_skips_short_text(self):
+        """Test that short text is skipped."""
+        collection = {"EntryTitle": "Short Title", "Abstract": "Short abstract."}
+
+        result = extract_from_collection("C1234-PROV", collection)
+
+        assert len(result.chunks) == 0
 
     def test_extracts_multiple_attributes(self):
-        """Test that multiple attributes are extracted."""
-
+        """Test that multiple attributes are extracted when both are long enough."""
         collection = {
-            "EntryTitle": "Test Title",
-            "Abstract": "Test Abstract",
-            "Purpose": "Test Purpose",
+            "EntryTitle": LONG_TITLE,
+            "Abstract": LONG_ABSTRACT,
         }
 
         result = extract_from_collection("C1234-PROV", collection)
 
-        assert len(result.chunks) == 3
+        assert len(result.chunks) == 2
         attributes = {c.attribute for c in result.chunks}
-        assert attributes == {"title", "abstract", "purpose"}
+        assert attributes == {"title", "abstract"}
 
     def test_extracts_science_keywords_as_kms_terms(self):
         """Test that science keywords are extracted as KMS term references."""
@@ -132,49 +151,50 @@ class TestExtractCollectionData:
 class TestExtractVariableData:
     """Tests for extract_from_variable function."""
 
-    def test_extracts_variable_attributes(self):
-        """Test that variable attributes are extracted."""
-
-        variable = {
-            "Name": "sea_surface_temp",
-            "LongName": "Sea Surface Temperature",
-            "Definition": "Temperature of the sea surface",
-        }
+    def test_extracts_variable_definition(self):
+        """Test that variable definition is extracted when >= 200 chars."""
+        variable = {"Definition": LONG_DEFINITION}
 
         result = extract_from_variable("V1234-PROV", variable)
 
-        assert len(result.chunks) == 3
-        attributes = {c.attribute for c in result.chunks}
-        assert attributes == {"name", "long_name", "definition"}
+        assert len(result.chunks) == 1
+        assert result.chunks[0].attribute == "definition"
+
+    def test_skips_short_definition(self):
+        """Test that short definition is skipped."""
+        variable = {"Definition": "Temperature of the sea surface"}
+
+        result = extract_from_variable("V1234-PROV", variable)
+
+        assert len(result.chunks) == 0
 
 
 class TestExtractCitationData:
     """Tests for extract_from_citation function."""
 
     def test_extracts_citation_attributes(self):
-        """Test that citation attributes are extracted."""
-
+        """Test that citation title and abstract are extracted when >= 200 chars."""
         citation = {
-            "Name": "Test Paper Title",
-            "Abstract": "This paper describes important research findings.",
-            "CitationMetadata": {
-                "Publisher": "Test Publisher",
-                "Author": [
-                    {"Given": "Alice", "Family": "Author"},
-                    {"Given": "Bob", "Family": "Writer"},
-                ],
-            },
+            "Name": LONG_TITLE,
+            "Abstract": LONG_ABSTRACT,
         }
 
         result = extract_from_citation("CIT1234-PROV", citation)
 
-        assert len(result.chunks) == 4
+        assert len(result.chunks) == 2
         attributes = {c.attribute for c in result.chunks}
-        assert attributes == {"name", "authors", "publisher", "abstract"}
+        assert attributes == {"title", "abstract"}
 
-        # Check authors are formatted correctly
-        authors_chunk = next(c for c in result.chunks if c.attribute == "authors")
-        assert authors_chunk.text_content == "Alice Author; Bob Writer"
+    def test_skips_short_citation_text(self):
+        """Test that short citation text is skipped."""
+        citation = {
+            "Name": "Short Paper Title",
+            "Abstract": "Brief abstract.",
+        }
+
+        result = extract_from_citation("CIT1234-PROV", citation)
+
+        assert len(result.chunks) == 0
 
 
 class TestExtractData:
@@ -182,14 +202,13 @@ class TestExtractData:
 
     def test_dispatches_to_collection_extractor(self):
         """Test that collection type routes correctly."""
-
         message = ConceptMessage(
             action="concept-update",
             concept_type="collection",
             concept_id="C1234-PROV",
             revision_id="1",
         )
-        collection = {"EntryTitle": "Test"}
+        collection = {"EntryTitle": LONG_TITLE}
         result = extract_data(message, collection)
 
         assert len(result.chunks) == 1
@@ -197,18 +216,18 @@ class TestExtractData:
 
     def test_dispatches_to_variable_extractor(self):
         """Test that variable type routes correctly."""
-
         message = ConceptMessage(
             action="concept-update",
             concept_type="variable",
             concept_id="V1234-PROV",
             revision_id="1",
         )
-        variable = {"Name": "test_var"}
+        variable = {"Definition": LONG_DEFINITION}
         result = extract_data(message, variable)
 
         assert len(result.chunks) == 1
         assert result.chunks[0].concept_type == "variable"
+        assert result.chunks[0].attribute == "definition"
 
     def test_invalid_concept_type_raises_validation_error(self):
         """Test that invalid concept type raises ValidationError due to ConceptType enum."""
@@ -286,8 +305,8 @@ class TestBedrockEmbeddingGenerator:
 
         assert len(embedding) == 1024
 
-    def test_passes_concept_type_and_attribute_to_trace(self):
-        """Test that concept_type and attribute are passed to trace."""
+    def test_passes_concept_type_and_attribute_to_span(self):
+        """Test that concept_type and attribute are passed to span for embedding tracking."""
 
         mock_response = {"embedding": [0.1] * 1024, "inputTextTokenCount": 10}
         mock_client = MagicMock()
@@ -295,17 +314,20 @@ class TestBedrockEmbeddingGenerator:
             "body": MagicMock(read=lambda: json.dumps(mock_response).encode())
         }
 
-        mock_trace = MagicMock()
+        mock_span = MagicMock()
         generator = BedrockEmbeddingGenerator(client=mock_client)
         generator.generate(
             "test text",
             concept_type="collection",
             attribute="abstract",
-            trace=mock_trace,
+            span=mock_span,
         )
 
-        # Trace generation should have been created with metadata
-        mock_trace.generation.assert_called_once()
+        # Span start_observation should have been called with as_type="embedding"
+        mock_span.start_observation.assert_called_once()
+        call_kwargs = mock_span.start_observation.call_args.kwargs
+        assert call_kwargs["as_type"] == "embedding"
+        assert call_kwargs["name"] == "embed-abstract"
 
 
 class TestPostgresDatastore:
@@ -415,9 +437,8 @@ class TestHandleUpdate:
 
         with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
             mock_fetch.return_value = {
-                "EntryTitle": "MODIS Sea Surface Temperature",
-                "Abstract": "Daily measurements of ocean temperature",
-                "Purpose": "Climate monitoring",
+                "EntryTitle": LONG_TITLE,
+                "Abstract": LONG_ABSTRACT,
             }
             with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
                 mock_assoc.return_value = {}
@@ -426,14 +447,13 @@ class TestHandleUpdate:
 
                     handle_update(message, mock_repo, mock_embedder)
 
-        # Should have called generate 3 times (title, abstract, purpose)
-        assert mock_embedder.generate.call_count == 3
+        # Should have called generate 2 times (title, abstract)
+        assert mock_embedder.generate.call_count == 2
 
         # Verify each call had the correct text
         call_texts = [call[0][0] for call in mock_embedder.generate.call_args_list]
-        assert "MODIS Sea Surface Temperature" in call_texts
-        assert "Daily measurements of ocean temperature" in call_texts
-        assert "Climate monitoring" in call_texts
+        assert LONG_TITLE in call_texts
+        assert LONG_ABSTRACT in call_texts
 
     def test_embedder_called_with_concept_type_and_attribute(self):
         """Test that embedder receives concept_type and attribute for routing."""
@@ -451,7 +471,7 @@ class TestHandleUpdate:
         )
 
         with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
-            mock_fetch.return_value = {"EntryTitle": "Test Title"}
+            mock_fetch.return_value = {"EntryTitle": LONG_TITLE}
             with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
                 mock_assoc.return_value = {}
                 with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
@@ -469,7 +489,7 @@ class TestProcessKMSTerms:
     """Tests for process_kms_terms function."""
 
     def test_looks_up_kms_terms(self):
-        """Test that KMS lookup is called for extracted terms."""
+        """Test that KMS batch lookup is called for extracted terms."""
 
         mock_repo = MagicMock()
         mock_repo.get_kms_embedding.return_value = None
@@ -481,22 +501,31 @@ class TestProcessKMSTerms:
             KMSTerm(term="TERRA", scheme="platforms"),
         ]
 
-        mock_kms_term = KMSTerm(
-            uuid="test-uuid",
-            scheme="instruments",
-            term="MODIS",
-            definition="Imaging Spectroradiometer",
-        )
+        mock_lookup_results = {
+            ("MODIS", "instruments"): KMSTerm(
+                uuid="modis-uuid",
+                scheme="instruments",
+                term="MODIS",
+                definition="Imaging Spectroradiometer",
+            ),
+            ("TERRA", "platforms"): KMSTerm(
+                uuid="terra-uuid",
+                scheme="platforms",
+                term="TERRA",
+                definition="Satellite",
+            ),
+        }
 
-        with patch("lambdas.embedding.handler.lookup_term") as mock_lookup:
-            mock_lookup.return_value = mock_kms_term
+        with patch("lambdas.embedding.handler.lookup_terms") as mock_lookup:
+            mock_lookup.return_value = mock_lookup_results
 
             process_kms_terms(kms_terms, mock_repo, mock_embedder)
 
-        # Should have looked up both terms
-        assert mock_lookup.call_count == 2
-        mock_lookup.assert_any_call("MODIS", "instruments")
-        mock_lookup.assert_any_call("TERRA", "platforms")
+        # Should have called lookup_terms once with all terms
+        mock_lookup.assert_called_once()
+        call_args = mock_lookup.call_args[0][0]
+        assert ("MODIS", "instruments") in call_args
+        assert ("TERRA", "platforms") in call_args
 
     def test_embeds_new_kms_terms(self):
         """Test that new KMS terms are embedded and stored."""
@@ -515,10 +544,10 @@ class TestProcessKMSTerms:
             definition="Moderate Resolution Imaging Spectroradiometer",
         )
 
-        with patch("lambdas.embedding.handler.lookup_term") as mock_lookup:
-            mock_lookup.return_value = mock_kms_term
+        with patch("lambdas.embedding.handler.lookup_terms") as mock_lookup:
+            mock_lookup.return_value = {("MODIS", "instruments"): mock_kms_term}
 
-            uuids = process_kms_terms(kms_terms, mock_repo, mock_embedder)
+            kms_refs = process_kms_terms(kms_terms, mock_repo, mock_embedder)
 
         # Should have generated embedding for the term + definition
         mock_embedder.generate.assert_called_once()
@@ -529,8 +558,8 @@ class TestProcessKMSTerms:
         # Should have stored the embedding
         mock_repo.upsert_kms_embedding.assert_called_once()
 
-        # Should return the UUID
-        assert uuids == ["modis-uuid"]
+        # Should return the (uuid, scheme) tuple
+        assert kms_refs == [("modis-uuid", "instruments")]
 
     def test_skips_existing_kms_embeddings(self):
         """Test that existing KMS embeddings are not re-generated."""
@@ -548,17 +577,17 @@ class TestProcessKMSTerms:
             definition="Imaging Spectroradiometer",
         )
 
-        with patch("lambdas.embedding.handler.lookup_term") as mock_lookup:
-            mock_lookup.return_value = mock_kms_term
+        with patch("lambdas.embedding.handler.lookup_terms") as mock_lookup:
+            mock_lookup.return_value = {("MODIS", "instruments"): mock_kms_term}
 
-            uuids = process_kms_terms(kms_terms, mock_repo, mock_embedder)
+            kms_refs = process_kms_terms(kms_terms, mock_repo, mock_embedder)
 
         # Should NOT have generated embedding (already exists)
         mock_embedder.generate.assert_not_called()
         mock_repo.upsert_kms_embedding.assert_not_called()
 
-        # Should still return the UUID for association
-        assert uuids == ["modis-uuid"]
+        # Should still return the (uuid, scheme) tuple for association
+        assert kms_refs == [("modis-uuid", "instruments")]
 
     def test_deduplicates_kms_terms(self):
         """Test that duplicate terms are only processed once."""
@@ -581,13 +610,15 @@ class TestProcessKMSTerms:
             definition="Definition",
         )
 
-        with patch("lambdas.embedding.handler.lookup_term") as mock_lookup:
-            mock_lookup.return_value = mock_kms_term
+        with patch("lambdas.embedding.handler.lookup_terms") as mock_lookup:
+            mock_lookup.return_value = {("MODIS", "instruments"): mock_kms_term}
 
             process_kms_terms(kms_terms, mock_repo, mock_embedder)
 
-        # Should only look up once
-        assert mock_lookup.call_count == 1
+        # Should only pass one term to lookup_terms (deduped)
+        mock_lookup.assert_called_once()
+        call_args = mock_lookup.call_args[0][0]
+        assert len(call_args) == 1
 
 
 class TestFullEmbeddingFlow:
@@ -608,10 +639,10 @@ class TestFullEmbeddingFlow:
             revision_id="1",
         )
 
-        # Realistic collection metadata
+        # Realistic collection metadata with text >= 200 chars
         collection_metadata = {
-            "EntryTitle": "MODIS/Terra Sea Surface Temperature",
-            "Abstract": "Daily global sea surface temperature measurements",
+            "EntryTitle": LONG_TITLE,
+            "Abstract": LONG_ABSTRACT,
             "ScienceKeywords": [
                 {
                     "Category": "EARTH SCIENCE",
@@ -649,15 +680,12 @@ class TestFullEmbeddingFlow:
             ),
         }
 
-        def lookup_side_effect(term, scheme):
-            return mock_kms_terms.get((term, scheme))
-
         with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
             mock_fetch.return_value = collection_metadata
             with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
                 mock_assoc.return_value = {}
-                with patch("lambdas.embedding.handler.lookup_term") as mock_lookup:
-                    mock_lookup.side_effect = lookup_side_effect
+                with patch("lambdas.embedding.handler.lookup_terms") as mock_lookup:
+                    mock_lookup.return_value = mock_kms_terms
                     with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
                         mock_langfuse.return_value = None
 
@@ -671,14 +699,14 @@ class TestFullEmbeddingFlow:
         ]
         assert len(chunk_embed_calls) == 2
 
-        # Verify KMS terms were looked up
-        assert mock_lookup.call_count == 3  # SST, TERRA, MODIS
+        # Verify KMS batch lookup was called once
+        mock_lookup.assert_called_once()
 
         # Verify KMS embeddings were generated (3 new terms)
         kms_embed_calls = [
             c
             for c in mock_embedder.generate.call_args_list
-            if c.kwargs.get("concept_type") == "kms"
+            if c.kwargs.get("concept_type") == "kms_term"
         ]
         assert len(kms_embed_calls) == 3
 
@@ -689,9 +717,13 @@ class TestFullEmbeddingFlow:
         assert call_args[0][1] == "C1234-PROV"
 
         # Verify KMS associations were created
-        mock_repo.upsert_concept_kms_associations.assert_called_once()
-        assoc_call = mock_repo.upsert_concept_kms_associations.call_args
-        assert set(assoc_call[0][2]) == {"sst-uuid", "terra-uuid", "modis-uuid"}
+        mock_repo.upsert_kms_associations.assert_called_once()
+        assoc_call = mock_repo.upsert_kms_associations.call_args
+        assert set(assoc_call[0][2]) == {
+            ("sst-uuid", "sciencekeywords"),
+            ("terra-uuid", "platforms"),
+            ("modis-uuid", "instruments"),
+        }
 
 
 class TestHandleDelete:
@@ -703,7 +735,7 @@ class TestHandleDelete:
         mock_repo = MagicMock()
         mock_repo.delete_chunks.return_value = 3
         mock_repo.delete_associations.return_value = 2
-        mock_repo.delete_concept_kms_associations.return_value = 5
+        mock_repo.delete_kms_associations.return_value = 5
 
         message = ConceptMessage(
             action="concept-delete",
@@ -716,7 +748,7 @@ class TestHandleDelete:
 
         mock_repo.delete_chunks.assert_called_once_with("C1234-PROV")
         mock_repo.delete_associations.assert_called_once_with("C1234-PROV")
-        mock_repo.delete_concept_kms_associations.assert_called_once_with("C1234-PROV")
+        mock_repo.delete_kms_associations.assert_called_once_with("C1234-PROV")
 
 
 class TestHandler:
@@ -854,3 +886,207 @@ class TestHandler:
         # Only the first should have failed
         assert len(result["batchItemFailures"]) == 1
         assert result["batchItemFailures"][0]["itemIdentifier"] == "msg-1"
+
+
+class TestLangfuseSessionTracking:
+    """Tests for Langfuse session ID tracking from SQS messages."""
+
+    def test_process_message_extracts_langfuse_session_id(self):
+        """Test that process_message extracts LangfuseSessionId from message attributes."""
+
+        record = {
+            "messageId": "msg-1",
+            "body": json.dumps(
+                {
+                    "action": "concept-update",
+                    "concept-type": "collection",
+                    "concept-id": "C1234-PROV",
+                    "revision-id": 1,
+                }
+            ),
+            "messageAttributes": {
+                "LangfuseSessionId": {
+                    "stringValue": "bootstrap-abc12345",
+                    "dataType": "String",
+                }
+            },
+        }
+
+        mock_repo = MagicMock()
+        mock_repo.get_kms_embedding.return_value = None
+        mock_embedder = MagicMock()
+        mock_embedder.generate.return_value = [0.1] * 1024
+
+        with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
+            mock_fetch.return_value = {"EntryTitle": "Test"}
+            with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
+                mock_assoc.return_value = {}
+                with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
+                    mock_lf_client = MagicMock()
+                    mock_span = MagicMock()
+
+                    # Context manager pattern with end_on_exit=False
+                    mock_lf_client.start_as_current_span.return_value.__enter__ = MagicMock(
+                        return_value=mock_span
+                    )
+                    mock_lf_client.start_as_current_span.return_value.__exit__ = MagicMock(
+                        return_value=None
+                    )
+                    mock_langfuse.return_value = mock_lf_client
+
+                    process_message(record, mock_repo, mock_embedder)
+
+                    # Verify start_as_current_span was called with trace name
+                    mock_lf_client.start_as_current_span.assert_called_once()
+                    call_kwargs = mock_lf_client.start_as_current_span.call_args.kwargs
+                    assert call_kwargs["name"] == "collection:C1234-PROV"
+
+                    # Verify update_current_trace was called with session_id
+                    mock_lf_client.update_current_trace.assert_called_once_with(
+                        session_id="bootstrap-abc12345",
+                    )
+
+                    # Verify span.update was called with input
+                    mock_span.update.assert_called()
+
+    def test_process_message_handles_missing_session_id(self):
+        """Test that process_message works when no LangfuseSessionId is present."""
+
+        record = {
+            "messageId": "msg-1",
+            "body": json.dumps(
+                {
+                    "action": "concept-update",
+                    "concept-type": "collection",
+                    "concept-id": "C1234-PROV",
+                    "revision-id": 1,
+                }
+            ),
+            # No messageAttributes
+        }
+
+        mock_repo = MagicMock()
+        mock_repo.get_kms_embedding.return_value = None
+        mock_embedder = MagicMock()
+        mock_embedder.generate.return_value = [0.1] * 1024
+
+        with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
+            mock_fetch.return_value = {"EntryTitle": "Test"}
+            with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
+                mock_assoc.return_value = {}
+                with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
+                    mock_lf_client = MagicMock()
+                    mock_span = MagicMock()
+
+                    mock_lf_client.start_as_current_span.return_value.__enter__ = MagicMock(
+                        return_value=mock_span
+                    )
+                    mock_lf_client.start_as_current_span.return_value.__exit__ = MagicMock(
+                        return_value=None
+                    )
+                    mock_langfuse.return_value = mock_lf_client
+
+                    process_message(record, mock_repo, mock_embedder)
+
+                    # Verify start_as_current_span was called with trace name
+                    call_kwargs = mock_lf_client.start_as_current_span.call_args.kwargs
+                    assert call_kwargs["name"] == "collection:C1234-PROV"
+
+                    # Verify update_current_trace was called with session_id=None
+                    mock_lf_client.update_current_trace.assert_called_once_with(
+                        session_id=None,
+                    )
+
+                    # Verify span.update was called with input
+                    mock_span.update.assert_called()
+
+    def test_handle_update_uses_session_id_for_langfuse(self):
+        """Test that handle_update correctly uses session_id with Langfuse."""
+
+        mock_repo = MagicMock()
+        mock_repo.get_kms_embedding.return_value = None
+        mock_embedder = MagicMock()
+        mock_embedder.generate.return_value = [0.1] * 1024
+
+        message = ConceptMessage(
+            action="concept-update",
+            concept_type="collection",
+            concept_id="C1234-PROV",
+            revision_id="1",
+        )
+
+        with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
+            mock_fetch.return_value = {"EntryTitle": "Test"}
+            with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
+                mock_assoc.return_value = {}
+                with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
+                    mock_lf_client = MagicMock()
+                    mock_span = MagicMock()
+
+                    mock_lf_client.start_as_current_span.return_value.__enter__ = MagicMock(
+                        return_value=mock_span
+                    )
+                    mock_lf_client.start_as_current_span.return_value.__exit__ = MagicMock(
+                        return_value=None
+                    )
+                    mock_langfuse.return_value = mock_lf_client
+
+                    handle_update(message, mock_repo, mock_embedder, session_id="bootstrap-xyz789")
+
+                    # Verify start_as_current_span was called with trace name
+                    call_kwargs = mock_lf_client.start_as_current_span.call_args.kwargs
+                    assert call_kwargs["name"] == "collection:C1234-PROV"
+
+                    # Verify update_current_trace was called with session_id
+                    mock_lf_client.update_current_trace.assert_called_once_with(
+                        session_id="bootstrap-xyz789",
+                    )
+
+                    # Verify span.update was called
+                    mock_span.update.assert_called()
+
+    def test_handle_update_names_trace_without_session(self):
+        """Test that handle_update names the trace even without session_id."""
+
+        mock_repo = MagicMock()
+        mock_repo.get_kms_embedding.return_value = None
+        mock_embedder = MagicMock()
+        mock_embedder.generate.return_value = [0.1] * 1024
+
+        message = ConceptMessage(
+            action="concept-update",
+            concept_type="collection",
+            concept_id="C1234-PROV",
+            revision_id="1",
+        )
+
+        with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
+            mock_fetch.return_value = {"EntryTitle": "Test"}
+            with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
+                mock_assoc.return_value = {}
+                with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
+                    mock_lf_client = MagicMock()
+                    mock_span = MagicMock()
+
+                    mock_lf_client.start_as_current_span.return_value.__enter__ = MagicMock(
+                        return_value=mock_span
+                    )
+                    mock_lf_client.start_as_current_span.return_value.__exit__ = MagicMock(
+                        return_value=None
+                    )
+                    mock_langfuse.return_value = mock_lf_client
+
+                    # No session_id provided
+                    handle_update(message, mock_repo, mock_embedder, session_id=None)
+
+                    # Verify start_as_current_span was called with trace name
+                    call_kwargs = mock_lf_client.start_as_current_span.call_args.kwargs
+                    assert call_kwargs["name"] == "collection:C1234-PROV"
+
+                    # Verify update_current_trace was called with session_id=None
+                    mock_lf_client.update_current_trace.assert_called_once_with(
+                        session_id=None,
+                    )
+
+                    # Verify span.update was called
+                    mock_span.update.assert_called()

@@ -19,6 +19,12 @@ variable "subnet_tag_name_filter" {
   type        = string
 }
 
+variable "availability_zone" {
+  description = "Availability zone for the RDS instance"
+  type        = string
+  default     = "us-east-1a"
+}
+
 variable "instance_class" {
   description = "RDS instance class"
   type        = string
@@ -46,13 +52,13 @@ variable "engine_version" {
 variable "database_name" {
   description = "Name of the default database"
   type        = string
-  default     = "earthdata"
+  default     = "earthdata_mcp"
 }
 
 variable "master_username" {
   description = "Master username for the database"
   type        = string
-  default     = "earthdata_admin"
+  default     = "earthdata_mcp"
 }
 
 variable "backup_retention_period" {
@@ -77,4 +83,9 @@ variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
   default     = {}
+}
+
+variable "image_tag" {
+  description = "Docker image tag for Lambda functions"
+  type        = string
 }

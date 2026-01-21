@@ -175,10 +175,10 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
             print(f"[FAIL] ✗ {tool_folder.name}: {e}")
 
     # Summary
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"Loaded: {len(loaded)} tools")
     if failed:
         print(f"Failed: {len(failed)} tools: {', '.join(failed)}")
-    print(f"{'='*50}\n")
+    print(f"{'=' * 50}\n")
 
     return {"loaded": loaded, "failed": failed}

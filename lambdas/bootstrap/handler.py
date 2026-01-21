@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Any
 
 from util.cmr import CMRError, extract_concept_info, search_cmr
@@ -32,13 +33,16 @@ MAX_RETRIES = 3
 INITIAL_BACKOFF_SECONDS = 1
 
 
-def send_to_queue(queue_url: str, messages: list[dict[str, Any]]) -> int:
+def send_to_queue(
+    queue_url: str, messages: list[dict[str, Any]], session_id: str | None = None
+) -> int:
     """
     Send messages to the FIFO queue in batches.
 
     Args:
         queue_url: The SQS queue URL
         messages: List of message dictionaries
+        session_id: Optional Langfuse session ID to attach to messages
 
     Returns:
         Number of messages successfully sent
@@ -55,14 +59,22 @@ def send_to_queue(queue_url: str, messages: list[dict[str, Any]]) -> int:
             revision_id = msg["revision-id"]
             concept_type = msg["concept-type"]
 
-            entries.append(
-                {
-                    "Id": str(idx),
-                    "MessageBody": json.dumps(msg),
-                    "MessageGroupId": f"{concept_type}:{concept_id}",
-                    "MessageDeduplicationId": f"{concept_id}:{revision_id}",
+            entry = {
+                "Id": str(idx),
+                "MessageBody": json.dumps(msg),
+                "MessageGroupId": f"{concept_type}:{concept_id}",
+                "MessageDeduplicationId": f"{concept_id}:{revision_id}",
+            }
+
+            if session_id:
+                entry["MessageAttributes"] = {
+                    "LangfuseSessionId": {
+                        "DataType": "String",
+                        "StringValue": session_id,
+                    }
                 }
-            )
+
+            entries.append(entry)
 
         try:
             # Retry loop for partial batch failures with exponential backoff.
@@ -103,8 +115,6 @@ def send_to_queue(queue_url: str, messages: list[dict[str, Any]]) -> int:
                         f"SQS batch send failed after {MAX_RETRIES} retries: {failed_details}"
                     )
 
-        except RuntimeError:
-            raise
         except Exception as e:
             logger.error("Error sending batch to SQS: %s", e)
             raise
@@ -131,12 +141,16 @@ def handler(event: dict[str, Any], _context) -> dict[str, Any]:
     dry_run = event.get("dry_run", False)
     queue_url = os.environ.get("EMBEDDING_QUEUE_URL")
 
+    # Generate session ID for Langfuse tracing across all embedding lambda invocations
+    session_id = f"bootstrap-{uuid.uuid4().hex[:8]}"
+
     logger.info(
-        "Starting bootstrap: concept_type=%s, search_params=%s, page_size=%d, dry_run=%s",
+        "Starting bootstrap: concept_type=%s, search_params=%s, page_size=%d, dry_run=%s, session_id=%s",
         concept_type,
         search_params,
         page_size,
         dry_run,
+        session_id,
     )
 
     if not queue_url and not dry_run:
@@ -162,7 +176,7 @@ def handler(event: dict[str, Any], _context) -> dict[str, Any]:
             logger.info("[DRY RUN] Would send %d messages to queue", len(messages))
             total_sent += len(messages)
         else:
-            sent = send_to_queue(queue_url, messages)
+            sent = send_to_queue(queue_url, messages, session_id)
             total_sent += sent
             logger.info("Sent %d messages to queue", sent)
 
@@ -173,6 +187,7 @@ def handler(event: dict[str, Any], _context) -> dict[str, Any]:
         "total_sent": total_sent,
         "total_errors": total_errors,
         "dry_run": dry_run,
+        "langfuse_session_id": session_id,
     }
 
     logger.info("Bootstrap complete: %s", summary)

@@ -9,17 +9,11 @@ import json
 import logging
 import os
 
-from pydantic import ValidationError
-
 from util.models import ConceptMessage
 from util.sqs import get_sqs_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-class InvalidMessageError(Exception):
-    """Raised when an SNS message is malformed or missing required fields."""
 
 
 def process_record(record: dict) -> dict:
@@ -29,19 +23,8 @@ def process_record(record: dict) -> dict:
     Parses and validates the message, then forwards it to the FIFO queue.
     """
     sns_message = record.get("Sns", {})
-    message_id = sns_message.get("MessageId", "unknown")
-
-    try:
-        raw_message = json.loads(sns_message.get("Message", "{}"))
-    except json.JSONDecodeError as e:
-        logger.error("Failed to parse SNS message %s: %s", message_id, e)
-        raise InvalidMessageError(f"Invalid JSON in SNS message: {e}") from e
-
-    try:
-        message = ConceptMessage.model_validate(raw_message)
-    except ValidationError as e:
-        logger.error("Invalid message %s: %s", message_id, e)
-        raise InvalidMessageError(f"Message validation failed: {e}") from e
+    raw_message = json.loads(sns_message.get("Message", "{}"))
+    message = ConceptMessage.model_validate(raw_message)
 
     queue_url = os.environ.get("EMBEDDING_QUEUE_URL")
     if not queue_url:
@@ -86,7 +69,8 @@ def handler(event: dict, _context) -> dict:
         try:
             result = process_record(record)
             results.append(result)
-        except (InvalidMessageError, Exception) as e:
+        except Exception as e:
+            logger.exception("Failed to process record")
             errors.append(
                 {
                     "message_id": record.get("Sns", {}).get("MessageId", "unknown"),

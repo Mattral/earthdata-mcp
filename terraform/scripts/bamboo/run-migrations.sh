@@ -1,14 +1,14 @@
 #!/bin/bash
 set -e
 
-# Bamboo task: Run database migrations
+# Bamboo task: Run database migrations via Lambda
 #
 # NOTE: This task should normally be DISABLED. Only enable after deploying
 #       the database stack or when new migrations are added.
 #
 # Prerequisites:
 #   - Database stack must be deployed
-#   - psql must be available on the build agent
+#   - Application stack must be deployed (migration Lambda)
 #
 # Bamboo Variables:
 # +---------------------------------+----------+---------+
@@ -26,42 +26,39 @@ export AWS_ACCESS_KEY_ID="${bamboo_AWS_ACCESS_KEY_ID}"
 export AWS_SECRET_ACCESS_KEY="${bamboo_AWS_SECRET_ACCESS_KEY}"
 
 ENVIRONMENT="${bamboo_ENVIRONMENT_NAME}"
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
-MIGRATIONS_DIR="${PROJECT_ROOT}/migrations"
+LAMBDA_NAME="${ENVIRONMENT}-earthdata-mcp-migration"
 
 echo "Running database migrations"
 echo "Environment: $ENVIRONMENT"
+echo "Lambda: $LAMBDA_NAME"
 
-if ! command -v psql &> /dev/null; then
-    echo "ERROR: psql is not installed on this agent"
+echo "Invoking migration Lambda..."
+RESPONSE=$(aws lambda invoke \
+    --function-name "$LAMBDA_NAME" \
+    --payload '{}' \
+    --cli-binary-format raw-in-base64-out \
+    /tmp/migration-response.json)
+
+echo "Lambda response: $RESPONSE"
+
+# Check for function errors
+if echo "$RESPONSE" | grep -q '"FunctionError"'; then
+    echo "ERROR: Lambda function returned an error"
+    cat /tmp/migration-response.json
     exit 1
 fi
 
-SECRET_ID="${ENVIRONMENT}-earthdata-mcp-db"
+# Display the response
+echo "Migration result:"
+cat /tmp/migration-response.json
+echo ""
 
-echo "Fetching database credentials from Secrets Manager..."
-DB_SECRET=$(aws secretsmanager get-secret-value \
-    --secret-id "$SECRET_ID" \
-    --query SecretString \
-    --output text)
-
-if [ -z "$DB_SECRET" ]; then
-    echo "ERROR: Could not fetch secret '$SECRET_ID'"
+# Check for success in response body
+if grep -q '"message": "Migrations completed"' /tmp/migration-response.json; then
+    echo "All migrations completed successfully"
+elif grep -q '"message": "No migrations found"' /tmp/migration-response.json; then
+    echo "No migrations to run"
+else
+    echo "ERROR: Unexpected response from migration Lambda"
     exit 1
 fi
-
-DB_URL=$(echo "$DB_SECRET" | jq -r '.url')
-
-echo "Running migrations from: $MIGRATIONS_DIR"
-
-for migration in "$MIGRATIONS_DIR"/*.sql; do
-    if [ -f "$migration" ]; then
-        filename=$(basename "$migration")
-        echo "  Running: $filename"
-        psql "$DB_URL" -f "$migration"
-    fi
-done
-
-echo "All migrations completed successfully"

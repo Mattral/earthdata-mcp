@@ -2,6 +2,7 @@
 
 # pylint: disable=no-member  # psycopg3 has type inference issues with pylint
 
+import contextlib
 import json
 import logging
 import os
@@ -34,6 +35,20 @@ def get_database_credentials() -> dict[str, Any]:
     return json.loads(response["SecretString"])
 
 
+def _is_connection_healthy(conn: Any) -> bool:
+    """Check if connection is still usable."""
+    if conn is None or conn.closed:
+        return False
+    try:
+        # Quick health check - will fail if connection is stale
+        # Use a transaction context to ensure clean state
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+
+
 def get_db_connection() -> Any:
     """
     Get the database connection (lazy initialization, reused across Lambda invocations).
@@ -42,8 +57,13 @@ def get_db_connection() -> Any:
     If the connection is closed or broken, a new one will be created.
     """
     global _connection
-    if _connection is None or _connection.closed:
+    if not _is_connection_healthy(_connection):
+        # Close stale connection if it exists
+        if _connection is not None:
+            with contextlib.suppress(Exception):
+                _connection.close()
         creds = get_database_credentials()
-        _connection = psycopg.connect(creds["url"])
+        _connection = psycopg.connect(creds["url"], autocommit=True)
         register_vector(_connection)
+        logger.info("Created new database connection")
     return _connection

@@ -38,7 +38,7 @@ locals {
 resource "aws_ecr_repository" "ingest_lambda" {
   name                 = "${var.environment_name}-earthdata-mcp-ingest"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
@@ -71,7 +71,7 @@ resource "aws_ecr_lifecycle_policy" "ingest_lambda" {
 resource "aws_ecr_repository" "embedding_lambda" {
   name                 = "${var.environment_name}-earthdata-mcp-embedding"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
@@ -104,7 +104,7 @@ resource "aws_ecr_lifecycle_policy" "embedding_lambda" {
 resource "aws_ecr_repository" "bootstrap_lambda" {
   name                 = "${var.environment_name}-earthdata-mcp-bootstrap"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
@@ -138,7 +138,7 @@ resource "aws_ecr_lifecycle_policy" "bootstrap_lambda" {
 resource "aws_ecr_repository" "mcp_server" {
   name                 = "${var.environment_name}-earthdata-mcp-server"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
@@ -189,13 +189,9 @@ module "application" {
   bootstrap_lambda_image = "${aws_ecr_repository.bootstrap_lambda.repository_url}:${var.image_tag}"
 
   # Configuration
-  cmr_url                = var.cmr_url
-  embeddings_table       = var.embeddings_table
-  associations_table     = var.associations_table
-  kms_embeddings_table   = var.kms_embeddings_table
-  kms_associations_table = var.kms_associations_table
-  embedding_model        = var.embedding_model
-  bedrock_region         = var.bedrock_region
+  cmr_url            = var.cmr_url
+  embeddings_table   = var.embeddings_table
+  associations_table = var.associations_table
 
   # Lambda configuration
   ingest_lambda_timeout        = var.ingest_lambda_timeout

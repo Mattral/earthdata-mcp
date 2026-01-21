@@ -75,6 +75,52 @@ resource "aws_iam_role" "mcp_task" {
   tags = var.tags
 }
 
+resource "aws_iam_role_policy" "mcp_task" {
+  name = "${var.environment_name}-earthdata-mcp-task-policy"
+  role = aws_iam_role.mcp_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SecretsManager"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = var.database_secret_arn
+      },
+      {
+        Sid    = "Bedrock"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-*",
+          "arn:aws:bedrock:*:*:inference-profile/us.amazon.titan-embed-*"
+        ]
+      },
+      {
+        Sid    = "SSMGetParameter"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter"
+        ]
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.environment_name}-langfuse-secret-key"
+      },
+      {
+        Sid    = "KMSDecryptSSM"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = "arn:aws:kms:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:alias/aws/ssm"
+      }
+    ]
+  })
+}
+
 # Security group for MCP server
 resource "aws_security_group" "mcp_server" {
   name_prefix = "${var.environment_name}-earthdata-mcp-server-sg-"

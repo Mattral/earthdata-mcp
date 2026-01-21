@@ -14,22 +14,19 @@ from util.models import ConceptMessage, EmbeddingChunk, ExtractionResult, KMSTer
 logger = logging.getLogger(__name__)
 
 # Field mappings: UMM field names -> attribute names for each concept type
-COLLECTION_FIELDS = {
-    "EntryTitle": "title",
-    "Abstract": "abstract",
-    "Purpose": "purpose",
-}
+COLLECTION_FIELDS = {"EntryTitle": "title", "Abstract": "abstract"}
 
 VARIABLE_FIELDS = {
-    "Name": "name",
-    "LongName": "long_name",
     "Definition": "definition",
 }
 
 CITATION_FIELDS = {
-    "Name": "name",
+    "Name": "title",
     "Abstract": "abstract",
 }
+
+
+MIN_TEXT_LENGTH = 200  # Skip text too short to embed meaningfully
 
 
 def extract_text_chunks(
@@ -41,6 +38,8 @@ def extract_text_chunks(
     """
     Extract text fields from metadata based on field mapping.
 
+    Skips fields with text shorter than MIN_TEXT_LENGTH characters.
+
     Args:
         concept_type: Type of concept (collection, variable, citation)
         concept_id: CMR concept ID
@@ -48,11 +47,12 @@ def extract_text_chunks(
         field_map: Maps UMM field names -> attribute names
 
     Returns:
-        List of EmbeddingChunk for each non-empty field found
+        List of EmbeddingChunk for each field with sufficient text
     """
     chunks = []
     for umm_field, attribute in field_map.items():
-        if text := metadata.get(umm_field):
+        text = metadata.get(umm_field)
+        if text and len(text.strip()) >= MIN_TEXT_LENGTH:
             chunks.append(
                 EmbeddingChunk(
                     concept_type=concept_type,
@@ -62,53 +62,6 @@ def extract_text_chunks(
                 )
             )
     return chunks
-
-
-def extract_citation_authors(
-    concept_id: str,
-    metadata: dict[str, Any],
-) -> EmbeddingChunk | None:
-    """Extract formatted author names from citation metadata."""
-    citation_metadata = metadata.get("CitationMetadata", {})
-    authors = citation_metadata.get("Author", [])
-
-    if not authors:
-        return None
-
-    names = []
-    for author in authors:
-        given = author.get("Given", "")
-        family = author.get("Family", "")
-        if given and family:
-            names.append(f"{given} {family}")
-        elif family:
-            names.append(family)
-
-    if not names:
-        return None
-
-    return EmbeddingChunk(
-        concept_type="citation",
-        concept_id=concept_id,
-        attribute="authors",
-        text_content="; ".join(names),
-    )
-
-
-def extract_citation_publisher(
-    concept_id: str,
-    metadata: dict[str, Any],
-) -> EmbeddingChunk | None:
-    """Extract publisher from citation metadata."""
-    citation_metadata = metadata.get("CitationMetadata", {})
-    if publisher := citation_metadata.get("Publisher"):
-        return EmbeddingChunk(
-            concept_type="citation",
-            concept_id=concept_id,
-            attribute="publisher",
-            text_content=publisher,
-        )
-    return None
 
 
 def extract_science_keywords(metadata: dict[str, Any]) -> list[KMSTerm]:
@@ -159,14 +112,8 @@ def extract_from_variable(concept_id: str, metadata: dict[str, Any]) -> Extracti
 
 
 def extract_from_citation(concept_id: str, metadata: dict[str, Any]) -> ExtractionResult:
-    """Extract embeddable data from a citation."""
+    """Extract embeddable data from a citation (name and abstract only)."""
     chunks = extract_text_chunks("citation", concept_id, metadata, CITATION_FIELDS)
-
-    if author_chunk := extract_citation_authors(concept_id, metadata):
-        chunks.append(author_chunk)
-    if publisher_chunk := extract_citation_publisher(concept_id, metadata):
-        chunks.append(publisher_chunk)
-
     return ExtractionResult(chunks=chunks, kms_terms=[])
 
 

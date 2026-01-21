@@ -37,3 +37,13 @@ output "secret_name" {
   description = "Name of the Secrets Manager secret"
   value       = aws_secretsmanager_secret.database.name
 }
+
+output "migration_lambda_arn" {
+  description = "ARN of the migration Lambda function"
+  value       = aws_lambda_function.migration.arn
+}
+
+output "migration_lambda_name" {
+  description = "Name of the migration Lambda function"
+  value       = aws_lambda_function.migration.function_name
+}

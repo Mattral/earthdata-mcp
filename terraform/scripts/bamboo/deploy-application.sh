@@ -20,10 +20,8 @@ set -e
 # | bamboo_AWS_SECRET_ACCESS_KEY    | Yes      | -                              |
 # | bamboo_AWS_DEFAULT_REGION       | No       | us-east-1                      |
 # | bamboo_CMR_URL                  | No       | https://cmr.earthdata.nasa.gov |
-# | bamboo_EMBEDDING_MODEL          | No       | amazon.titan-embed-text-v2:0   |
-# | bamboo_BEDROCK_REGION           | No       | us-east-1                      |
-# | bamboo_EMBEDDINGS_TABLE         | No       | concept_embeddings             |
-# | bamboo_ASSOCIATIONS_TABLE       | No       | concept_associations           |
+# | bamboo_EMBEDDINGS_TABLE         | No       | embeddings                     |
+# | bamboo_ASSOCIATIONS_TABLE       | No       | associations                   |
 # | bamboo_LANGFUSE_HOST            | No       |                                |
 # | bamboo_LANGFUSE_PUBLIC_KEY      | No       |                                |
 # | bamboo_LANGFUSE_SECRET_KEY      | No       |                                |
@@ -59,8 +57,6 @@ export TF_VAR_load_balancer_name="${bamboo_LOAD_BALANCER_NAME}"
 
 # Export optional terraform variables if set
 [ -n "$bamboo_CMR_URL" ] && export TF_VAR_cmr_url="$bamboo_CMR_URL"
-[ -n "$bamboo_EMBEDDING_MODEL" ] && export TF_VAR_embedding_model="$bamboo_EMBEDDING_MODEL"
-[ -n "$bamboo_BEDROCK_REGION" ] && export TF_VAR_bedrock_region="$bamboo_BEDROCK_REGION"
 [ -n "$bamboo_EMBEDDINGS_TABLE" ] && export TF_VAR_embeddings_table="$bamboo_EMBEDDINGS_TABLE"
 [ -n "$bamboo_ASSOCIATIONS_TABLE" ] && export TF_VAR_associations_table="$bamboo_ASSOCIATIONS_TABLE"
 [ -n "$bamboo_LANGFUSE_HOST" ] && export TF_VAR_langfuse_host="$bamboo_LANGFUSE_HOST"
@@ -77,7 +73,7 @@ if [ -n "$bamboo_LANGFUSE_SECRET_KEY" ]; then
         --name "${ENVIRONMENT}-langfuse-secret-key" \
         --value "$bamboo_LANGFUSE_SECRET_KEY" \
         --type SecureString \
-        --overwrite
+        --overwrite > /dev/null
 fi
 
 SCRIPTS_DIR="scripts"

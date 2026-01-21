@@ -105,7 +105,10 @@ resource "aws_iam_role_policy" "embedding_lambda" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = var.database_secret_arn
+        Resource = [
+          var.database_secret_arn,
+          aws_secretsmanager_secret.redis.arn
+        ]
       },
       {
         Sid    = "Bedrock"
@@ -114,7 +117,8 @@ resource "aws_iam_role_policy" "embedding_lambda" {
           "bedrock:InvokeModel"
         ]
         Resource = [
-          "arn:aws:bedrock:${var.bedrock_region}::foundation-model/${var.embedding_model}"
+          "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-*",
+          "arn:aws:bedrock:*:*:inference-profile/us.amazon.titan-embed-*"
         ]
       },
       {
@@ -135,6 +139,14 @@ resource "aws_iam_role_policy" "embedding_lambda" {
         Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.environment_name}-langfuse-secret-key"
       },
       {
+        Sid    = "KMSDecryptSSM"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = "arn:aws:kms:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:alias/aws/ssm"
+      },
+      {
         Sid    = "VPCNetworkInterfaces"
         Effect = "Allow"
         Action = [
@@ -152,25 +164,24 @@ resource "aws_iam_role_policy" "embedding_lambda" {
 
 # Security group for embedding lambda (VPC access to RDS)
 resource "aws_security_group" "embedding_lambda" {
-  name_prefix = "${var.environment_name}-earthdata-mcp-embedding-sg-"
+  name        = "${var.environment_name}-earthdata-mcp-embedding-sg"
   description = "Security group for embedding lambda VPC access"
   vpc_id      = var.vpc_id
-
-  egress {
-    description = "HTTPS outbound (CMR, Bedrock, Secrets Manager)"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   tags = merge(var.tags, {
     Name = "${var.environment_name}-earthdata-mcp-embedding-sg"
   })
+}
 
-  lifecycle {
-    create_before_destroy = true
-  }
+# HTTPS egress for CMR, Bedrock, Secrets Manager
+resource "aws_security_group_rule" "embedding_https_egress" {
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.embedding_lambda.id
+  description       = "HTTPS outbound (CMR, Bedrock, Secrets Manager)"
 }
 
 # Allow embedding lambda to connect to database
@@ -182,6 +193,17 @@ resource "aws_security_group_rule" "embedding_to_database" {
   source_security_group_id = var.database_security_group_id
   security_group_id        = aws_security_group.embedding_lambda.id
   description              = "PostgreSQL to embeddings database"
+}
+
+# Allow embedding lambda to connect to Redis
+resource "aws_security_group_rule" "embedding_to_redis" {
+  type                     = "egress"
+  from_port                = 6379
+  to_port                  = 6379
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.redis.id
+  security_group_id        = aws_security_group.embedding_lambda.id
+  description              = "Redis for caching"
 }
 
 # IAM role for bootstrap lambda

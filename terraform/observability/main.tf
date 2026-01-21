@@ -39,6 +39,7 @@ module "langfuse" {
 
   # Load balancer
   lb_listener       = data.aws_lb_listener.https.arn
+  load_balancer_arn = data.aws_lb.main.arn
   load_balancer_dns = data.aws_lb.main.dns_name
 
   # Image tag and base path

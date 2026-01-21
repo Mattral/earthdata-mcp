@@ -3,18 +3,57 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
-from util.kms import clear_cache, lookup_term
+from util.kms import clear_cache, lookup_terms
 from util.models import KMSTerm
 
 
-@pytest.fixture(autouse=True)
-def clear_kms_cache():
-    """Clear the KMS cache before and after each test."""
-    clear_cache()
-    yield
-    clear_cache()
+@pytest.fixture
+def mock_cache():
+    """Create a mock cache client that simulates Redis HASH operations."""
+    cache = MagicMock()
+    cache.is_available.return_value = True
+    cache._hash_store = {}  # key -> {field -> value}
+
+    def mock_hexists(key):
+        return key in cache._hash_store and len(cache._hash_store[key]) > 0
+
+    def mock_hget(key, field):
+        if key in cache._hash_store:
+            return cache._hash_store[key].get(field)
+        return None
+
+    def mock_hmget(key, fields):
+        result = {}
+        if key in cache._hash_store:
+            for field in fields:
+                result[field] = cache._hash_store[key].get(field)
+        else:
+            for field in fields:
+                result[field] = None
+        return result
+
+    def mock_hmset(key, mapping, ttl=None):  # pylint: disable=unused-argument
+        if key not in cache._hash_store:
+            cache._hash_store[key] = {}
+        cache._hash_store[key].update(mapping)
+        return True
+
+    cache.hexists.side_effect = mock_hexists
+    cache.hget.side_effect = mock_hget
+    cache.hmget.side_effect = mock_hmget
+    cache.hmset.side_effect = mock_hmset
+    return cache
+
+
+@pytest.fixture
+def mock_cache_unavailable():
+    """Create a mock cache client that is unavailable."""
+    cache = MagicMock()
+    cache.is_available.return_value = False
+    cache.hexists.return_value = False
+    cache.hmset.return_value = False
+    return cache
 
 
 class TestKMSTerm:
@@ -44,240 +83,145 @@ class TestKMSTerm:
         assert term.definition is None
 
 
-class TestLookupTerm:
-    """Tests for lookup_term function."""
+class TestLookupTerms:
+    """Tests for lookup_terms batch function."""
 
-    def test_returns_term_on_successful_lookup(self):
-        """Should return KMSTerm when term is found."""
-        search_response = {"concepts": [{"prefLabel": "MODIS", "uuid": "modis-uuid-123"}]}
-        concept_response = {"definition": "Moderate Resolution Imaging Spectroradiometer"}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-
-            concept_mock = MagicMock(status_code=200)
-            concept_mock.json.return_value = concept_response
-            concept_mock.raise_for_status = MagicMock()
-
-            mock_get.side_effect = [search_mock, concept_mock]
-
-            result = lookup_term("MODIS", "instruments")
-
-            assert result is not None
-            assert result.uuid == "modis-uuid-123"
-            assert result.scheme == "instruments"
-            assert result.term == "MODIS"
-            assert result.definition == "Moderate Resolution Imaging Spectroradiometer"
-
-    def test_returns_none_when_no_concepts_found(self):
-        """Should return None when term is not found in KMS."""
-        search_response = {"concepts": []}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-            mock_get.return_value = search_mock
-
-            result = lookup_term("NONEXISTENT_TERM", "sciencekeywords")
-
-            assert result is None
-
-    def test_returns_none_on_network_error(self):
-        """Should return None when network request fails."""
-        with patch("util.kms.client.requests.get") as mock_get:
-            mock_get.side_effect = requests.RequestException("Connection refused")
-
-            result = lookup_term("MODIS", "instruments")
-
-            assert result is None
-
-    def test_returns_none_on_invalid_json(self):
-        """Should return None when response is not valid JSON."""
-        with patch("util.kms.client.requests.get") as mock_get:
-            mock_response = MagicMock(status_code=200)
-            mock_response.raise_for_status = MagicMock()
-            mock_response.json.side_effect = ValueError("Invalid JSON")
-            mock_get.return_value = mock_response
-
-            result = lookup_term("MODIS", "instruments")
-
-            assert result is None
-
-    def test_prefers_exact_match(self):
-        """Should prefer exact case-insensitive match over partial matches."""
-        search_response = {
+    def test_returns_results_for_multiple_terms(self, mock_cache):
+        """Should return results for multiple terms from same scheme."""
+        scheme_response = {
             "concepts": [
-                {"prefLabel": "MODIS/TERRA", "uuid": "wrong-uuid"},
-                {"prefLabel": "MODIS", "uuid": "correct-uuid"},
-                {"prefLabel": "MODIS/AQUA", "uuid": "also-wrong"},
+                {
+                    "prefLabel": "MODIS",
+                    "uuid": "modis-uuid",
+                    "definitions": [{"text": "MODIS def"}],
+                },
+                {
+                    "prefLabel": "ASTER",
+                    "uuid": "aster-uuid",
+                    "definitions": [{"text": "ASTER def"}],
+                },
             ]
         }
-        concept_response = {"definition": "The correct definition"}
 
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
+        with (
+            patch("util.kms.client.get_cache_client", return_value=mock_cache),
+            patch("util.kms.client.requests.get") as mock_get,
+        ):
+            response_mock = MagicMock(status_code=200)
+            response_mock.json.return_value = scheme_response
+            response_mock.raise_for_status = MagicMock()
+            mock_get.return_value = response_mock
 
-            concept_mock = MagicMock(status_code=200)
-            concept_mock.json.return_value = concept_response
-            concept_mock.raise_for_status = MagicMock()
+            results = lookup_terms([("MODIS", "instruments"), ("ASTER", "instruments")])
 
-            mock_get.side_effect = [search_mock, concept_mock]
+            assert len(results) == 2
+            assert results[("MODIS", "instruments")].uuid == "modis-uuid"
+            assert results[("ASTER", "instruments")].uuid == "aster-uuid"
+            # Only one API call for the whole scheme
+            assert mock_get.call_count == 1
 
-            result = lookup_term("MODIS", "instruments")
-
-            assert result.uuid == "correct-uuid"
-
-    def test_falls_back_to_first_result_if_no_exact_match(self):
-        """Should use first result if no exact match found."""
-        search_response = {
+    def test_handles_multiple_schemes(self, mock_cache):
+        """Should handle terms from different schemes."""
+        instruments_response = {
             "concepts": [
-                {"prefLabel": "MODIS/TERRA", "uuid": "first-uuid"},
-                {"prefLabel": "MODIS/AQUA", "uuid": "second-uuid"},
+                {"prefLabel": "MODIS", "uuid": "modis-uuid", "definitions": []},
             ]
         }
-        concept_response = {"definition": "Some definition"}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-
-            concept_mock = MagicMock(status_code=200)
-            concept_mock.json.return_value = concept_response
-            concept_mock.raise_for_status = MagicMock()
-
-            mock_get.side_effect = [search_mock, concept_mock]
-
-            result = lookup_term("MODIS", "instruments")
-
-            assert result.uuid == "first-uuid"
-
-    def test_caches_results(self):
-        """Should cache results to avoid duplicate API calls."""
-        search_response = {"concepts": [{"prefLabel": "MODIS", "uuid": "modis-uuid"}]}
-        concept_response = {"definition": "Cached definition"}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-
-            concept_mock = MagicMock(status_code=200)
-            concept_mock.json.return_value = concept_response
-            concept_mock.raise_for_status = MagicMock()
-
-            mock_get.side_effect = [search_mock, concept_mock]
-
-            # First call
-            result1 = lookup_term("MODIS", "instruments")
-            assert result1.definition == "Cached definition"
-            assert mock_get.call_count == 2  # search + concept
-
-            # Second call should use cache
-            result2 = lookup_term("MODIS", "instruments")
-            assert result2.definition == "Cached definition"
-            assert mock_get.call_count == 2  # No additional calls
-
-    def test_uses_correct_url_pattern(self):
-        """Should construct correct KMS API URL."""
-        search_response = {"concepts": []}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-            mock_get.return_value = search_mock
-
-            lookup_term("TERRA", "platforms")
-
-            call_args = mock_get.call_args
-            url = call_args[0][0]
-            assert "concept_scheme/platforms/pattern/TERRA" in url
-
-    def test_url_encodes_special_characters(self):
-        """Should URL-encode special characters in term and scheme."""
-        search_response = {"concepts": []}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-            mock_get.return_value = search_mock
-
-            lookup_term("TERM/WITH SPACES", "scheme&special")
-
-            call_args = mock_get.call_args
-            url = call_args[0][0]
-            assert "TERM%2FWITH%20SPACES" in url
-            assert "scheme%26special" in url
-
-    def test_does_not_cache_network_errors(self):
-        """Should retry after network errors instead of caching failure."""
-        search_response = {"concepts": [{"prefLabel": "RETRY", "uuid": "retry-uuid"}]}
-        concept_response = {"definition": "Success after retry"}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-
-            concept_mock = MagicMock(status_code=200)
-            concept_mock.json.return_value = concept_response
-            concept_mock.raise_for_status = MagicMock()
-
-            mock_get.side_effect = [
-                requests.RequestException("Connection refused"),
-                search_mock,
-                concept_mock,
+        platforms_response = {
+            "concepts": [
+                {"prefLabel": "TERRA", "uuid": "terra-uuid", "definitions": []},
             ]
+        }
 
-            # First call fails
-            result1 = lookup_term("RETRY_TEST", "instruments")
-            assert result1 is None
+        with (
+            patch("util.kms.client.get_cache_client", return_value=mock_cache),
+            patch("util.kms.client.requests.get") as mock_get,
+        ):
 
-            # Second call succeeds - should retry, not return cached None
-            result2 = lookup_term("RETRY_TEST", "instruments")
-            assert result2 is not None
-            assert result2.definition == "Success after retry"
+            def mock_response(url, **_kwargs):
+                mock = MagicMock(status_code=200)
+                mock.raise_for_status = MagicMock()
+                if "instruments" in url:
+                    mock.json.return_value = instruments_response
+                else:
+                    mock.json.return_value = platforms_response
+                return mock
+
+            mock_get.side_effect = mock_response
+
+            results = lookup_terms(
+                [
+                    ("MODIS", "instruments"),
+                    ("TERRA", "platforms"),
+                ]
+            )
+
+            assert results[("MODIS", "instruments")].uuid == "modis-uuid"
+            assert results[("TERRA", "platforms")].uuid == "terra-uuid"
+            # Two API calls - one per scheme
+            assert mock_get.call_count == 2
+
+    def test_returns_none_for_not_found_terms(self, mock_cache):
+        """Should return None for terms not found."""
+        scheme_response = {
+            "concepts": [
+                {"prefLabel": "MODIS", "uuid": "modis-uuid", "definitions": []},
+            ]
+        }
+
+        with (
+            patch("util.kms.client.get_cache_client", return_value=mock_cache),
+            patch("util.kms.client.requests.get") as mock_get,
+        ):
+            response_mock = MagicMock(status_code=200)
+            response_mock.json.return_value = scheme_response
+            response_mock.raise_for_status = MagicMock()
+            mock_get.return_value = response_mock
+
+            results = lookup_terms(
+                [
+                    ("MODIS", "instruments"),
+                    ("NONEXISTENT", "instruments"),
+                ]
+            )
+
+            assert results[("MODIS", "instruments")] is not None
+            assert results[("NONEXISTENT", "instruments")] is None
+
+    def test_returns_empty_dict_for_empty_input(self, mock_cache):
+        """Should return empty dict for empty input."""
+        with patch("util.kms.client.get_cache_client", return_value=mock_cache):
+            results = lookup_terms([])
+            assert not results
+
+    def test_uses_cached_scheme(self, mock_cache):
+        """Should use cached scheme for batch lookups."""
+        # Pre-populate cache
+        mock_cache._hash_store["kms:scheme:instruments"] = {
+            "MODIS": {"uuid": "cached-modis", "term": "MODIS", "definition": "Cached"},
+            "ASTER": {"uuid": "cached-aster", "term": "ASTER", "definition": "Cached"},
+        }
+
+        with (
+            patch("util.kms.client.get_cache_client", return_value=mock_cache),
+            patch("util.kms.client.requests.get") as mock_get,
+        ):
+            results = lookup_terms(
+                [
+                    ("MODIS", "instruments"),
+                    ("ASTER", "instruments"),
+                ]
+            )
+
+            assert results[("MODIS", "instruments")].uuid == "cached-modis"
+            assert results[("ASTER", "instruments")].uuid == "cached-aster"
+            mock_get.assert_not_called()
 
 
 class TestClearCache:
     """Tests for clear_cache function."""
 
-    def test_clears_cached_results(self):
-        """Should clear cached results so next lookup hits API."""
-        search_response = {"concepts": [{"prefLabel": "MODIS", "uuid": "modis-uuid"}]}
-        concept_response = {"definition": "First definition"}
-
-        with patch("util.kms.client.requests.get") as mock_get:
-            search_mock = MagicMock(status_code=200)
-            search_mock.json.return_value = search_response
-            search_mock.raise_for_status = MagicMock()
-
-            concept_mock = MagicMock(status_code=200)
-            concept_mock.json.return_value = concept_response
-            concept_mock.raise_for_status = MagicMock()
-
-            # Keep returning fresh mocks
-            mock_get.side_effect = [
-                search_mock,
-                concept_mock,
-                search_mock,
-                concept_mock,
-            ]
-
-            # First call
-            lookup_term("MODIS", "instruments")
-            assert mock_get.call_count == 2
-
-            # Clear cache
-            clear_cache()
-
-            # Second call should hit API again
-            lookup_term("MODIS", "instruments")
-            assert mock_get.call_count == 4  # 2 more calls
+    def test_clear_cache_does_not_error(self):
+        """clear_cache should not raise errors."""
+        # Just verify it doesn't crash - Redis entries expire via TTL
+        clear_cache()

@@ -37,3 +37,13 @@ output "secret_name" {
   description = "Name of the Secrets Manager secret"
   value       = module.database.secret_name
 }
+
+output "migration_lambda_arn" {
+  description = "ARN of the migration Lambda function"
+  value       = module.database.migration_lambda_arn
+}
+
+output "migration_lambda_name" {
+  description = "Name of the migration Lambda function"
+  value       = module.database.migration_lambda_name
+}

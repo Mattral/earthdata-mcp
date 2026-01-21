@@ -79,7 +79,7 @@ def search_cmr(
     page_size: int = 500,
 ) -> Generator[list[dict[str, Any]]]:
     """
-    Search CMR and yield pages of results.
+    Search CMR and yield pages of results using search-after pagination.
 
     Args:
         concept_type: Type of concept (collection, variable, citation)
@@ -94,22 +94,21 @@ def search_cmr(
     """
     if concept_type not in CONCEPT_ENDPOINTS:
         raise CMRError(
-            f"Unsupported concept_type: {concept_type}. "
-            f"Supported: {list(CONCEPT_ENDPOINTS.keys())}"
+            f"Unsupported concept_type: {concept_type}. Supported: {list(CONCEPT_ENDPOINTS.keys())}"
         )
 
     endpoint = f"{CMR_URL}{CONCEPT_ENDPOINTS[concept_type]}"
-
     params = {**search_params, "page_size": page_size}
-    page_num = 1
+    headers = {}
     total_fetched = 0
 
     while True:
-        params["page_num"] = page_num
-        logger.info("Fetching %s page %d (page_size=%d)", concept_type, page_num, page_size)
+        logger.info(
+            "Fetching %s (page_size=%d, fetched=%d)", concept_type, page_size, total_fetched
+        )
 
         try:
-            response = requests.get(endpoint, params=params, timeout=60)
+            response = requests.get(endpoint, params=params, headers=headers, timeout=60)
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as e:
@@ -117,22 +116,19 @@ def search_cmr(
 
         items = data.get("items", [])
         if not items:
-            logger.info("No more results, stopping pagination")
+            logger.info("No more results")
             break
 
         total_fetched += len(items)
-        logger.info(
-            "Fetched %d items (total: %d, hits: %s)",
-            len(items),
-            total_fetched,
-            data.get("hits", "unknown"),
-        )
+        hits = response.headers.get("CMR-Hits", "unknown")
+        logger.info("Fetched %d items (total: %d, hits: %s)", len(items), total_fetched, hits)
 
         yield items
 
-        hits = data.get("hits", 0)
-        if total_fetched >= hits:
+        # Get search-after token for next page
+        search_after = response.headers.get("CMR-Search-After")
+        if not search_after or len(items) < page_size:
             logger.info("Fetched all %d items", total_fetched)
             break
 
-        page_num += 1
+        headers["CMR-Search-After"] = search_after

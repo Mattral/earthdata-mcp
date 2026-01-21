@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 from typing import Any
 
 from util.bedrock import get_bedrock_client
@@ -10,7 +9,7 @@ from util.embeddings.base import EmbeddingError, EmbeddingGenerator
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 
 
 class BedrockEmbeddingGenerator(EmbeddingGenerator):
@@ -53,7 +52,8 @@ class BedrockEmbeddingGenerator(EmbeddingGenerator):
         text: str,
         concept_type: str | None = None,
         attribute: str | None = None,
-        trace: Any | None = None,
+        span: Any | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> list[float]:
         """
         Generate an embedding vector using Bedrock Titan.
@@ -62,7 +62,8 @@ class BedrockEmbeddingGenerator(EmbeddingGenerator):
             text: The text to embed.
             concept_type: Ignored in this implementation (same model for all).
             attribute: Ignored in this implementation (same model for all).
-            trace: Optional Langfuse trace for observability.
+            span: Optional Langfuse span for observability.
+            metadata: Optional metadata dict for Langfuse generation tracking.
 
         Returns:
             Embedding vector as a list of floats.
@@ -70,17 +71,24 @@ class BedrockEmbeddingGenerator(EmbeddingGenerator):
         Raises:
             EmbeddingError: If embedding generation fails.
         """
-        generation = None
-        if trace:
-            generation = trace.generation(
-                name="bedrock-embedding",
-                model=self._model_id,
-                input=text,
-                metadata={
-                    "concept_type": concept_type,
-                    "attribute": attribute,
-                },
-            )
+        observation = None
+        if span:
+            try:
+                # Name includes attribute for easier identification in Langfuse UI
+                obs_name = f"embed-{attribute}" if attribute else "embed"
+                # Merge provided metadata with text_length
+                obs_metadata = {"text_length": len(text)}
+                if metadata:
+                    obs_metadata.update(metadata)
+                observation = span.start_observation(
+                    name=obs_name,
+                    as_type="embedding",
+                    model=self._model_id,
+                    input=text,
+                    metadata=obs_metadata,
+                )
+            except Exception as e:
+                logger.debug("Failed to create Langfuse observation: %s", e)
 
         try:
             response = self.client.invoke_model(
@@ -92,17 +100,26 @@ class BedrockEmbeddingGenerator(EmbeddingGenerator):
             result = json.loads(response["body"].read())
             embedding = result["embedding"]
 
-            if generation:
-                generation.end(
-                    output={"embedding_dimensions": len(embedding)},
-                    usage={"input": len(text)},
-                )
+            if observation:
+                try:
+                    # Titan returns inputTextTokenCount
+                    input_tokens = result.get("inputTextTokenCount", 0)
+                    observation.update(
+                        usage_details={"input": input_tokens, "output": 0, "total": input_tokens}
+                    )
+                    observation.end()
+                except Exception as e:
+                    logger.debug("Failed to end Langfuse observation: %s", e)
 
             return embedding
 
         except Exception as e:
-            if generation:
-                generation.end(level="ERROR", status_message=str(e))
+            if observation:
+                try:
+                    observation.update(level="ERROR", status_message=str(e))
+                    observation.end()
+                except Exception:
+                    pass
             raise EmbeddingError(f"Failed to generate embedding: {e}") from e
 
 
@@ -167,8 +184,9 @@ class RoutingEmbeddingGenerator(EmbeddingGenerator):
         text: str,
         concept_type: str | None = None,
         attribute: str | None = None,
-        trace: Any | None = None,
+        span: Any | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> list[float]:
         """Generate embedding using the appropriate generator for the concept/attribute."""
         generator = self._get_generator(concept_type, attribute)
-        return generator.generate(text, concept_type, attribute, trace)
+        return generator.generate(text, concept_type, attribute, span, metadata)

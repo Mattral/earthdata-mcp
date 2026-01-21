@@ -22,17 +22,13 @@ resource "aws_db_subnet_group" "main" {
 
 # Security group for RDS
 resource "aws_security_group" "database" {
-  name_prefix = "${var.environment_name}-earthdata-mcp-db-sg-"
+  name        = "${var.environment_name}-earthdata-mcp-db-sg"
   description = "Security group for earthdata-mcp PostgreSQL database"
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
     Name = "${var.environment_name}-earthdata-mcp-db-sg"
   })
-
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
 # Allow inbound from specified security groups
@@ -96,6 +92,7 @@ resource "aws_db_instance" "main" {
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.database.id]
   parameter_group_name   = aws_db_parameter_group.pgvector.name
+  availability_zone      = var.availability_zone
 
   publicly_accessible = false
   multi_az            = var.environment_name == "prod" ? true : false

@@ -16,6 +16,8 @@ elif [[ "$DOCKERFILE" == "BootstrapLambdaDockerfile" ]]; then
     IMAGE_NAME="$ENVIRONMENT-earthdata-mcp-bootstrap"
 elif [[ "$DOCKERFILE" == "McpServerDockerfile" ]]; then
     IMAGE_NAME="$ENVIRONMENT-earthdata-mcp-server"
+elif [[ "$DOCKERFILE" == "MigrationLambdaDockerfile" ]]; then
+    IMAGE_NAME="$ENVIRONMENT-earthdata-mcp-migration"
 else
     echo "ERROR: Unknown Dockerfile: $DOCKERFILE"
     exit 1

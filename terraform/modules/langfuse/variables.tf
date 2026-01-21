@@ -119,6 +119,11 @@ variable "lb_listener" {
   type = string
 }
 
+variable "load_balancer_arn" {
+  description = "Load balancer ARN"
+  type        = string
+}
+
 variable "load_balancer_dns" {
   description = "Load balancer DNS name"
   type        = string

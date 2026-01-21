@@ -64,7 +64,8 @@ class KMSEnrichedEmbeddingGenerator(EmbeddingGenerator):
         text: str,
         concept_type: str | None = None,
         attribute: str | None = None,
-        trace: Any | None = None,
+        span: Any | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> list[float]:
         """
         Enrich text with KMS definitions, then generate embedding.
@@ -73,13 +74,13 @@ class KMSEnrichedEmbeddingGenerator(EmbeddingGenerator):
             text: The text to enrich and embed (may contain multiple terms/paths).
             concept_type: Concept type for the base generator.
             attribute: Attribute name for the base generator.
-            trace: Optional Langfuse trace for observability.
+            span: Optional Langfuse span for observability.
 
         Returns:
             Embedding vector from the base generator.
         """
         enriched_text = self._enrich_text(text)
-        return self._base.generate(enriched_text, concept_type, attribute, trace)
+        return self._base.generate(enriched_text, concept_type, attribute, span)
 
     def _enrich_text(self, text: str) -> str:
         """Enrich text by looking up and appending KMS definitions."""

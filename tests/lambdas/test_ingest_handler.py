@@ -3,12 +3,9 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
-from lambdas.ingest.handler import (
-    InvalidMessageError,
-    handler,
-    process_record,
-)
+from lambdas.ingest.handler import handler, process_record
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +63,7 @@ class TestMessageValidation:
         assert result["status"] == "queued"
 
     def test_missing_concept_type_raises(self):
-        """Test that missing concept-type raises InvalidMessageError."""
+        """Test that missing concept-type raises ValidationError."""
         record = self._make_sns_record(
             {
                 "concept-id": "C1234-PROVIDER",
@@ -75,11 +72,11 @@ class TestMessageValidation:
             }
         )
 
-        with pytest.raises(InvalidMessageError, match="validation failed"):
+        with pytest.raises(ValidationError):
             process_record(record)
 
     def test_missing_concept_id_raises(self):
-        """Test that missing concept-id raises InvalidMessageError."""
+        """Test that missing concept-id raises ValidationError."""
         record = self._make_sns_record(
             {
                 "concept-type": "collection",
@@ -88,11 +85,11 @@ class TestMessageValidation:
             }
         )
 
-        with pytest.raises(InvalidMessageError, match="validation failed"):
+        with pytest.raises(ValidationError):
             process_record(record)
 
     def test_missing_revision_id_raises(self):
-        """Test that missing revision-id raises InvalidMessageError."""
+        """Test that missing revision-id raises ValidationError."""
         record = self._make_sns_record(
             {
                 "concept-type": "collection",
@@ -101,11 +98,11 @@ class TestMessageValidation:
             }
         )
 
-        with pytest.raises(InvalidMessageError, match="validation failed"):
+        with pytest.raises(ValidationError):
             process_record(record)
 
     def test_missing_action_raises(self):
-        """Test that missing action raises InvalidMessageError."""
+        """Test that missing action raises ValidationError."""
         record = self._make_sns_record(
             {
                 "concept-type": "collection",
@@ -114,11 +111,11 @@ class TestMessageValidation:
             }
         )
 
-        with pytest.raises(InvalidMessageError, match="validation failed"):
+        with pytest.raises(ValidationError):
             process_record(record)
 
     def test_invalid_action_raises(self):
-        """Test that invalid action raises InvalidMessageError."""
+        """Test that invalid action raises ValidationError."""
         record = self._make_sns_record(
             {
                 "concept-type": "collection",
@@ -128,7 +125,7 @@ class TestMessageValidation:
             }
         )
 
-        with pytest.raises(InvalidMessageError, match="validation failed"):
+        with pytest.raises(ValidationError):
             process_record(record)
 
 
