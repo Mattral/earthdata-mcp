@@ -11,7 +11,7 @@ health_check {
   healthy_threshold   = 2
   interval            = 30
   matcher             = "200"
-  path                = "/search/nlp/langfuse"
+  path                = var.base_path
   timeout             = 5
   unhealthy_threshold = 3
 }
@@ -30,17 +30,14 @@ resource "aws_lb_listener_rule" "langfuse" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.langfuse_web.arn
   }
-  
+
   condition {
     path_pattern {
-      values = ["/search/nlp/langfuse", "/search/nlp/langfuse/*"]
+      values = [var.base_path, "${var.base_path}/*"]
     }
   }
 }
 
-data "aws_lb" "lb_name" {
-  name = "cmr-services-${var.environment_name}"
-}
 resource "aws_lb_target_group" "langfuse_worker" {
    name        = "${var.environment_name}-langfuse-worker"
   port        = 3030
@@ -50,10 +47,10 @@ resource "aws_lb_target_group" "langfuse_worker" {
 }
 
 resource "aws_lb_listener" "langfuse-worker" {
-  load_balancer_arn = data.aws_lb.lb_name.arn
+  load_balancer_arn = var.load_balancer_arn
   port              = 3030  # Different port for worker
   protocol          = "HTTP"
-  
+
   default_action {
     type             = "fixed-response"
     fixed_response {
@@ -63,7 +60,7 @@ resource "aws_lb_listener" "langfuse-worker" {
     }
     target_group_arn = aws_lb_target_group.langfuse_worker.arn
   }
-  
+
   tags = {
     Name        = "${var.environment_name}-langfuse-worker-listener"
     Environment = var.environment_name
@@ -86,7 +83,7 @@ resource "aws_lb_listener_rule" "langfuse-worker" {
 
   }
 
-  condition {    
+  condition {
     source_ip {
       values = [var.vpc_cidr_block]
     }

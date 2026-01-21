@@ -1,0 +1,293 @@
+"""PostgreSQL datastore implementation using pgvector."""
+
+# pylint: disable=no-member  # psycopg3 has type inference issues with pylint
+
+import logging
+import os
+import uuid
+from typing import Any
+
+from util.database import get_db_connection
+from util.datastores.base import EmbeddingDatastore
+from util.models import ConceptType
+
+logger = logging.getLogger(__name__)
+
+EMBEDDINGS_TABLE = os.environ.get("EMBEDDINGS_TABLE", "embeddings")
+ASSOCIATIONS_TABLE = os.environ.get("ASSOCIATIONS_TABLE", "associations")
+
+# Map CMR association keys to types
+ASSOCIATION_TYPE_MAP = {
+    "variables": "variable",
+    "citations": "citation",
+}
+
+
+class PostgresEmbeddingDatastore(EmbeddingDatastore):
+    """PostgreSQL + pgvector implementation of EmbeddingDatastore."""
+
+    def __init__(self):
+        self.conn = get_db_connection()
+
+    def upsert_chunks(
+        self,
+        entity_type: ConceptType | str,
+        external_id: str,
+        chunks: list[tuple[str, str, list[float]]],
+    ) -> int:
+        """Insert or update embedding chunks for an entity."""
+        if not chunks:
+            return 0
+
+        type_str = entity_type.value if hasattr(entity_type, "value") else entity_type
+
+        with self.conn.transaction(), self.conn.cursor() as cur:
+            # Delete existing chunks for this entity
+            cur.execute(
+                f"DELETE FROM {EMBEDDINGS_TABLE} WHERE external_id = %s AND type = %s",
+                (external_id, type_str),
+            )
+
+            # Insert new chunks
+            for attribute, text_content, embedding in chunks:
+                cur.execute(
+                    f"""
+                        INSERT INTO {EMBEDDINGS_TABLE}
+                            (id, type, external_id, attribute, text_content, embedding)
+                        VALUES
+                            (%s, %s, %s, %s, %s, %s)
+                        """,
+                    (
+                        str(uuid.uuid4()),
+                        type_str,
+                        external_id,
+                        attribute,
+                        text_content,
+                        embedding,
+                    ),
+                )
+
+        logger.info("Upserted %d chunks for %s:%s", len(chunks), type_str, external_id)
+        return len(chunks)
+
+    def delete_chunks(self, external_id: str) -> int:
+        """Delete all embedding chunks for an entity."""
+        with self.conn.transaction(), self.conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {EMBEDDINGS_TABLE} WHERE external_id = %s",
+                (external_id,),
+            )
+            deleted = cur.rowcount
+        return deleted
+
+    def upsert_associations(
+        self,
+        left_type: ConceptType | str,
+        left_id: str,
+        associations: dict[str, list[str]],
+    ) -> int:
+        """Store associations between entities."""
+        if not associations:
+            return 0
+
+        count = 0
+        left_type_str = left_type.value if hasattr(left_type, "value") else left_type
+
+        with self.conn.transaction(), self.conn.cursor() as cur:
+            # Delete existing concept associations (not KMS) for this entity
+            cur.execute(
+                f"DELETE FROM {ASSOCIATIONS_TABLE} WHERE left_id = %s AND right_type IN ('variable', 'citation')",
+                (left_id,),
+            )
+
+            for assoc_key, right_type in ASSOCIATION_TYPE_MAP.items():
+                ids = associations.get(assoc_key, [])
+                for right_id in ids:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {ASSOCIATIONS_TABLE}
+                            (left_type, left_id, right_type, right_id)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (left_id, right_id) DO NOTHING
+                        """,
+                        (left_type_str, left_id, right_type, right_id),
+                    )
+                    count += cur.rowcount
+
+        return count
+
+    def delete_associations(self, external_id: str) -> int:
+        """Delete all associations where this entity is involved."""
+        with self.conn.transaction(), self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                    DELETE FROM {ASSOCIATIONS_TABLE}
+                    WHERE left_id = %s OR right_id = %s
+                    """,
+                (external_id, external_id),
+            )
+            deleted = cur.rowcount
+        return deleted
+
+    def search_similar(
+        self,
+        embedding: list[float],
+        limit: int = 10,
+        entity_type: ConceptType | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search for similar embeddings using pgvector."""
+        with self.conn.cursor() as cur:
+            if entity_type:
+                type_str = entity_type.value if hasattr(entity_type, "value") else entity_type
+                cur.execute(
+                    f"""
+                    SELECT type, external_id, attribute, text_content,
+                           1 - (embedding <=> %s::vector) as similarity
+                    FROM {EMBEDDINGS_TABLE}
+                    WHERE type = %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (embedding, type_str, embedding, limit),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT type, external_id, attribute, text_content,
+                           1 - (embedding <=> %s::vector) as similarity
+                    FROM {EMBEDDINGS_TABLE}
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (embedding, embedding, limit),
+                )
+
+            results = []
+            for row in cur.fetchall():
+                results.append(
+                    {
+                        "type": row[0],
+                        "external_id": row[1],
+                        "attribute": row[2],
+                        "text_content": row[3],
+                        "similarity": float(row[4]),
+                    }
+                )
+
+        return results
+
+    def get_kms_embedding(self, kms_uuid: str) -> dict[str, Any] | None:
+        """Get a KMS embedding by UUID."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT type, external_id, attribute, text_content, embedding
+                FROM {EMBEDDINGS_TABLE}
+                WHERE external_id = %s AND type IN ('instruments', 'platforms', 'sciencekeywords')
+                """,
+                (kms_uuid,),
+            )
+            row = cur.fetchone()
+            if row:
+                return {
+                    "type": row[0],
+                    "external_id": row[1],
+                    "attribute": row[2],
+                    "text_content": row[3],
+                    "embedding": list(row[4]) if row[4] is not None else None,
+                }
+        return None
+
+    def upsert_kms_embedding(
+        self,
+        kms_uuid: str,
+        scheme: str,
+        term: str,
+        definition: str | None,
+        embedding: list[float],
+    ) -> bool:
+        """Insert a KMS term embedding, skipping if it already exists.
+
+        Uses ON CONFLICT DO NOTHING to avoid deadlocks when multiple Lambdas
+        try to insert the same KMS term concurrently.
+        """
+        text_content = f"{term}: {definition}" if definition else term
+
+        try:
+            with self.conn.transaction(), self.conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                        INSERT INTO {EMBEDDINGS_TABLE}
+                            (id, type, external_id, attribute, text_content, embedding)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (external_id, attribute) DO NOTHING
+                        """,
+                    (str(uuid.uuid4()), scheme, kms_uuid, "term", text_content, embedding),
+                )
+                inserted = cur.rowcount > 0
+            if inserted:
+                logger.info("Inserted KMS embedding for %s/%s", scheme, term)
+            return inserted
+        except Exception as e:
+            # Log deadlocks but don't fail - another Lambda likely inserted it
+            if "deadlock" in str(e).lower():
+                logger.warning("Deadlock inserting KMS embedding %s/%s, skipping", scheme, term)
+                return False
+            raise
+
+    def upsert_kms_associations(
+        self,
+        left_type: ConceptType | str,
+        left_id: str,
+        kms_refs: list[tuple[str, str]],  # List of (kms_uuid, scheme)
+    ) -> int:
+        """Link an entity to KMS terms."""
+        if not kms_refs:
+            return 0
+
+        count = 0
+        left_type_str = left_type.value if hasattr(left_type, "value") else left_type
+
+        with self.conn.transaction(), self.conn.cursor() as cur:
+            # Delete existing KMS associations for this entity
+            cur.execute(
+                f"""
+                    DELETE FROM {ASSOCIATIONS_TABLE}
+                    WHERE left_id = %s AND right_type IN ('instruments', 'platforms', 'sciencekeywords')
+                    """,
+                (left_id,),
+            )
+
+            # Insert new associations
+            for kms_uuid, scheme in kms_refs:
+                cur.execute(
+                    f"""
+                        INSERT INTO {ASSOCIATIONS_TABLE}
+                            (left_type, left_id, right_type, right_id)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (left_id, right_id) DO NOTHING
+                        """,
+                    (left_type_str, left_id, scheme, kms_uuid),
+                )
+                count += cur.rowcount
+
+        logger.info("Created %d KMS associations for %s:%s", count, left_type_str, left_id)
+        return count
+
+    def delete_kms_associations(self, external_id: str) -> int:
+        """Delete all KMS associations for an entity."""
+        with self.conn.transaction(), self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                    DELETE FROM {ASSOCIATIONS_TABLE}
+                    WHERE left_id = %s AND right_type IN ('instruments', 'platforms', 'sciencekeywords')
+                    """,
+                (external_id,),
+            )
+            deleted = cur.rowcount
+        return deleted
+
+    def close(self) -> None:
+        """Close the database connection."""
+        if self.conn:
+            self.conn.close()

@@ -119,18 +119,26 @@ variable "lb_listener" {
   type = string
 }
 
+variable "load_balancer_arn" {
+  description = "Load balancer ARN"
+  type        = string
+}
+
 variable "load_balancer_dns" {
   description = "Load balancer DNS name"
   type        = string
 }
 
-# ECR Image URLs
-variable "langfuse_web_image" {
-  description = "Langfuse web Docker image URL"
+# Image tag for Langfuse containers
+variable "image_tag" {
+  description = "Docker image tag for Langfuse containers"
   type        = string
+  default     = "latest"
 }
 
-variable "langfuse_worker_image" {
-  description = "Langfuse worker Docker image URL"
+# Base path for Langfuse (when deployed behind a reverse proxy)
+variable "base_path" {
+  description = "Base path for Langfuse web UI and API"
   type        = string
+  default     = "/langfuse"
 }
