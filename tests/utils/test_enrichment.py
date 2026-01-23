@@ -5,11 +5,10 @@ from datetime import UTC, datetime
 from tests.conftest import GLOBAL_BOUNDING_BOX
 from util.enrichment import (
     _parse_spatial_resolution_from_title,
-    _parse_temporal_resolution_from_title,
     enrich_metadata,
     extract_spatial_extent,
-    extract_temporal_extent,
 )
+from util.temporal import extract_temporal_extent, parse_temporal_resolution_from_title
 
 
 class TestExtractTemporalExtent:
@@ -248,13 +247,13 @@ class TestExtractSpatialExtent:
 
 
 class TestParseTemporalResolutionFromTitle:
-    """Tests for _parse_temporal_resolution_from_title function."""
+    """Tests for parse_temporal_resolution_from_title function."""
 
     def test_parses_daily(self):
         """Test parsing 'Daily' from title."""
         title = "MODIS/Terra Land Surface Temperature Daily L3 Global 1km"
 
-        result = _parse_temporal_resolution_from_title(title)
+        result = parse_temporal_resolution_from_title(title)
 
         assert result == {"Value": 1, "Unit": "Day"}
 
@@ -262,7 +261,7 @@ class TestParseTemporalResolutionFromTitle:
         """Test parsing 'Monthly' from title."""
         title = "GPM Monthly Precipitation"
 
-        result = _parse_temporal_resolution_from_title(title)
+        result = parse_temporal_resolution_from_title(title)
 
         assert result == {"Value": 1, "Unit": "Month"}
 
@@ -270,7 +269,7 @@ class TestParseTemporalResolutionFromTitle:
         """Test parsing '8-Day' from title."""
         title = "MODIS/Terra Vegetation Indices 8-Day L3 Global 250m"
 
-        result = _parse_temporal_resolution_from_title(title)
+        result = parse_temporal_resolution_from_title(title)
 
         assert result == {"Value": 8, "Unit": "Day"}
 
@@ -278,15 +277,31 @@ class TestParseTemporalResolutionFromTitle:
         """Test parsing 'Hourly' from title."""
         title = "MERRA-2 Hourly Diagnostics"
 
-        result = _parse_temporal_resolution_from_title(title)
+        result = parse_temporal_resolution_from_title(title)
 
         assert result == {"Value": 1, "Unit": "Hour"}
+
+    def test_parses_12_hourly_with_space(self):
+        """Test parsing '12 Hourly' (with space) from title."""
+        title = "12 Hourly Interpolated Surface Air Pressure from Buoys"
+
+        result = parse_temporal_resolution_from_title(title)
+
+        assert result == {"Value": 12, "Unit": "Hour"}
+
+    def test_parses_12_hourly_with_hyphen(self):
+        """Test parsing '12-Hourly' (with hyphen) from title."""
+        title = "12-Hourly Interpolated Surface Position from Buoys"
+
+        result = parse_temporal_resolution_from_title(title)
+
+        assert result == {"Value": 12, "Unit": "Hour"}
 
     def test_returns_none_for_no_resolution(self):
         """Test returns None when no resolution found."""
         title = "MODIS/Terra Land Surface Temperature L3 Global 1km"
 
-        result = _parse_temporal_resolution_from_title(title)
+        result = parse_temporal_resolution_from_title(title)
 
         assert result is None
 

@@ -8,8 +8,9 @@ Derives enriched_metadata from raw CMR UMM-C metadata by:
 
 import copy
 import re
-from datetime import datetime
 from typing import Any
+
+from util.temporal import parse_temporal_resolution_from_title
 
 
 def enrich_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -31,64 +32,6 @@ def enrich_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     _enrich_spatial_resolution(enriched)
 
     return enriched
-
-
-def _parse_iso_datetime(date_str: str) -> datetime | None:
-    """Parse ISO datetime string, returning None on failure."""
-    try:
-        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def extract_temporal_extent(
-    metadata: dict[str, Any],
-) -> tuple[datetime | None, datetime | None, bool]:
-    """
-    Extract temporal start, end, and ongoing flag from UMM-C metadata.
-
-    Args:
-        metadata: UMM-C metadata
-
-    Returns:
-        Tuple of (start_date, end_date, is_ongoing)
-    """
-    start_date = None
-    end_date = None
-    is_ongoing = False
-
-    temporal_extents = metadata.get("TemporalExtents", [])
-    if not temporal_extents:
-        return None, None, False
-
-    for extent in temporal_extents:
-        if extent.get("EndsAtPresentFlag"):
-            is_ongoing = True
-
-        # Handle SingleDateTimes
-        for date_str in extent.get("SingleDateTimes", []):
-            parsed = _parse_iso_datetime(date_str)
-            if parsed:
-                if start_date is None or parsed < start_date:
-                    start_date = parsed
-                if end_date is None or parsed > end_date:
-                    end_date = parsed
-
-        # Handle RangeDateTimes
-        for range_dt in extent.get("RangeDateTimes", []):
-            begin = _parse_iso_datetime(range_dt.get("BeginningDateTime", ""))
-            end = _parse_iso_datetime(range_dt.get("EndingDateTime", ""))
-
-            if begin and (start_date is None or begin < start_date):
-                start_date = begin
-            if end and (end_date is None or end > end_date):
-                end_date = end
-
-    # If no end date, consider ongoing
-    if end_date is None:
-        is_ongoing = True
-
-    return start_date, end_date, is_ongoing
 
 
 def extract_spatial_extent(metadata: dict[str, Any]) -> tuple[str | None, bool]:
@@ -163,7 +106,7 @@ def _enrich_temporal_resolution(metadata: dict[str, Any]) -> None:
 
     # Try to extract from title
     title = metadata.get("EntryTitle", "")
-    resolution = _parse_temporal_resolution_from_title(title)
+    resolution = parse_temporal_resolution_from_title(title)
 
     if resolution and temporal_extents:
         # Add to first temporal extent
@@ -197,37 +140,6 @@ def _enrich_spatial_resolution(metadata: dict[str, Any]) -> None:
 
     if resolution:
         res_sys["HorizontalDataResolution"] = {"GriddedResolutions": [resolution]}
-
-
-def _parse_temporal_resolution_from_title(title: str) -> dict[str, Any] | None:
-    """
-    Parse temporal resolution from collection title.
-
-    Returns UMM-C compliant TemporalResolution object.
-    """
-    title_lower = title.lower()
-
-    # Check for common patterns
-    patterns = [
-        (r"\bdaily\b", 1, "Day"),
-        (r"\bhourly\b", 1, "Hour"),
-        (r"\bmonthly\b", 1, "Month"),
-        (r"\bweekly\b", 1, "Week"),
-        (r"\byearly\b", 1, "Year"),
-        (r"\bannual\b", 1, "Year"),
-        (r"\b(\d+)[-\s]?day\b", None, "Day"),
-        (r"\b(\d+)[-\s]?hour\b", None, "Hour"),
-        (r"\b(\d+)[-\s]?month\b", None, "Month"),
-        (r"\b(\d+)[-\s]?minute\b", None, "Minute"),
-    ]
-
-    for pattern, default_value, unit in patterns:
-        match = re.search(pattern, title_lower)
-        if match:
-            value = default_value if default_value is not None else int(match.group(1))
-            return {"Value": value, "Unit": unit}
-
-    return None
 
 
 def _parse_spatial_resolution_from_title(title: str) -> dict[str, Any] | None:
