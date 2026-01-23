@@ -29,10 +29,7 @@ export AWS_DEFAULT_REGION="${bamboo_AWS_DEFAULT_REGION:-us-east-1}"
 export AWS_ACCESS_KEY_ID="${bamboo_AWS_ACCESS_KEY_ID}"
 export AWS_SECRET_ACCESS_KEY="${bamboo_AWS_SECRET_ACCESS_KEY}"
 
-# Extract deployment package
-echo "Extracting deployment package..."
-tar -xzf earthdata-mcp-deployed-package.tgz
-cd terraform
+cd earthdata-mcp/terraform
 
 ENVIRONMENT="${bamboo_ENVIRONMENT_NAME}"
 AWS_REGION="${AWS_DEFAULT_REGION}"

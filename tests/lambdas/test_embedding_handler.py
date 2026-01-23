@@ -15,6 +15,7 @@ from lambdas.embedding.handler import (
     process_kms_terms,
     process_message,
 )
+from tests.conftest import GLOBAL_BOUNDING_BOX
 from util.cmr import CMRError, extract_data, fetch_concept
 from util.cmr.extraction import (
     extract_from_citation,
@@ -23,7 +24,7 @@ from util.cmr.extraction import (
 )
 from util.datastores.postgres import PostgresEmbeddingDatastore
 from util.embeddings import BedrockEmbeddingGenerator
-from util.models import ConceptMessage, KMSTerm
+from util.models import CollectionData, ConceptMessage, KMSTerm
 
 
 @pytest.fixture(autouse=True)
@@ -419,6 +420,89 @@ class TestHandleUpdate:
         mock_repo.upsert_chunks.assert_called_once()
         # Should have upserted associations
         mock_repo.upsert_associations.assert_called_once()
+        # Should have upserted collection metadata
+        mock_repo.upsert_collection.assert_called_once()
+
+    def test_upserts_collection_metadata(self):
+        """Test that collection metadata is upserted with enriched data."""
+
+        mock_repo = MagicMock()
+        mock_repo.get_kms_embedding.return_value = None
+        mock_embedder = MagicMock()
+        mock_embedder.generate.return_value = [0.1] * 1024
+
+        message = ConceptMessage(
+            action="concept-update",
+            concept_type="collection",
+            concept_id="C1234-PROV",
+            revision_id="1",
+        )
+
+        collection_metadata = {
+            "EntryTitle": "MODIS Daily 1km SST",
+            "TemporalExtents": [
+                {
+                    "RangeDateTimes": [
+                        {
+                            "BeginningDateTime": "2000-02-24T00:00:00Z",
+                            "EndingDateTime": "2020-12-31T23:59:59Z",
+                        }
+                    ]
+                }
+            ],
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {"BoundingRectangles": [GLOBAL_BOUNDING_BOX]}
+                }
+            },
+        }
+
+        with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
+            mock_fetch.return_value = collection_metadata
+            with patch("lambdas.embedding.handler.fetch_associations") as mock_assoc:
+                mock_assoc.return_value = {}
+                with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
+                    mock_langfuse.return_value = None
+
+                    handle_update(message, mock_repo, mock_embedder)
+
+        # Verify upsert_collection was called with correct arguments
+        mock_repo.upsert_collection.assert_called_once()
+        call_args = mock_repo.upsert_collection.call_args[0]
+
+        assert call_args[0] == "C1234-PROV"  # concept_id
+        collection_data = call_args[1]
+        assert isinstance(collection_data, CollectionData)
+        assert collection_data.metadata == collection_metadata
+        assert collection_data.temporal_start is not None
+        assert collection_data.temporal_end is not None
+        assert collection_data.spatial_wkt is not None
+        assert collection_data.is_global is True  # Full globe bounding box
+
+    def test_does_not_upsert_collection_for_variables(self):
+        """Test that collection metadata is not upserted for variable type."""
+
+        mock_repo = MagicMock()
+        mock_repo.get_kms_embedding.return_value = None
+        mock_embedder = MagicMock()
+        mock_embedder.generate.return_value = [0.1] * 1024
+
+        message = ConceptMessage(
+            action="concept-update",
+            concept_type="variable",
+            concept_id="V1234-PROV",
+            revision_id="1",
+        )
+
+        with patch("lambdas.embedding.handler.fetch_concept") as mock_fetch:
+            mock_fetch.return_value = {"Definition": LONG_DEFINITION}
+            with patch("lambdas.embedding.handler.get_langfuse") as mock_langfuse:
+                mock_langfuse.return_value = None
+
+                handle_update(message, mock_repo, mock_embedder)
+
+        # Should NOT have upserted collection metadata
+        mock_repo.upsert_collection.assert_not_called()
 
     def test_embedder_called_for_each_chunk(self):
         """Test that embedder.generate is called for each extracted chunk."""
@@ -736,6 +820,7 @@ class TestHandleDelete:
         mock_repo.delete_chunks.return_value = 3
         mock_repo.delete_associations.return_value = 2
         mock_repo.delete_kms_associations.return_value = 5
+        mock_repo.delete_collection.return_value = True
 
         message = ConceptMessage(
             action="concept-delete",
@@ -749,6 +834,27 @@ class TestHandleDelete:
         mock_repo.delete_chunks.assert_called_once_with("C1234-PROV")
         mock_repo.delete_associations.assert_called_once_with("C1234-PROV")
         mock_repo.delete_kms_associations.assert_called_once_with("C1234-PROV")
+        mock_repo.delete_collection.assert_called_once_with("C1234-PROV")
+
+    def test_delete_collection_only_for_collections(self):
+        """Test that delete_collection is only called for collection type."""
+
+        mock_repo = MagicMock()
+        mock_repo.delete_chunks.return_value = 1
+        mock_repo.delete_associations.return_value = 0
+        mock_repo.delete_kms_associations.return_value = 0
+
+        message = ConceptMessage(
+            action="concept-delete",
+            concept_type="variable",
+            concept_id="V1234-PROV",
+            revision_id="1",
+        )
+
+        handle_delete(message, mock_repo)
+
+        mock_repo.delete_chunks.assert_called_once()
+        mock_repo.delete_collection.assert_not_called()
 
 
 class TestHandler:

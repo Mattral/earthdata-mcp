@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from util.models import ConceptType
+from util.models import CollectionData, ConceptType
 
 
 class EmbeddingDatastore(ABC):
@@ -170,4 +170,26 @@ class EmbeddingDatastore(ABC):
 
         Returns:
             Number of associations deleted.
+        """
+
+    @abstractmethod
+    def upsert_collection(self, concept_id: str, data: CollectionData) -> None:
+        """
+        Upsert collection metadata into the collections table.
+
+        Args:
+            concept_id: CMR concept ID
+            data: CollectionData containing metadata and derived fields
+        """
+
+    @abstractmethod
+    def delete_collection(self, concept_id: str) -> bool:
+        """
+        Delete collection metadata from the collections table.
+
+        Args:
+            concept_id: CMR concept ID
+
+        Returns:
+            True if deleted, False if not found.
         """

@@ -2,6 +2,7 @@
 
 # pylint: disable=no-member  # psycopg3 has type inference issues with pylint
 
+import json
 import logging
 import os
 import uuid
@@ -9,7 +10,7 @@ from typing import Any
 
 from util.database import get_db_connection
 from util.datastores.base import EmbeddingDatastore
-from util.models import ConceptType
+from util.models import CollectionData, ConceptType
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +73,12 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
 
     def delete_chunks(self, external_id: str) -> int:
         """Delete all embedding chunks for an entity."""
-        with self.conn.transaction(), self.conn.cursor() as cur:
+        with self.conn.cursor() as cur:
             cur.execute(
                 f"DELETE FROM {EMBEDDINGS_TABLE} WHERE external_id = %s",
                 (external_id,),
             )
-            deleted = cur.rowcount
-        return deleted
+            return cur.rowcount
 
     def upsert_associations(
         self,
@@ -118,7 +118,7 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
 
     def delete_associations(self, external_id: str) -> int:
         """Delete all associations where this entity is involved."""
-        with self.conn.transaction(), self.conn.cursor() as cur:
+        with self.conn.cursor() as cur:
             cur.execute(
                 f"""
                     DELETE FROM {ASSOCIATIONS_TABLE}
@@ -126,8 +126,7 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
                     """,
                 (external_id, external_id),
             )
-            deleted = cur.rowcount
-        return deleted
+            return cur.rowcount
 
     def search_similar(
         self,
@@ -213,27 +212,20 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
         """
         text_content = f"{term}: {definition}" if definition else term
 
-        try:
-            with self.conn.transaction(), self.conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                        INSERT INTO {EMBEDDINGS_TABLE}
-                            (id, type, external_id, attribute, text_content, embedding)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (external_id, attribute) DO NOTHING
-                        """,
-                    (str(uuid.uuid4()), scheme, kms_uuid, "term", text_content, embedding),
-                )
-                inserted = cur.rowcount > 0
-            if inserted:
-                logger.info("Inserted KMS embedding for %s/%s", scheme, term)
-            return inserted
-        except Exception as e:
-            # Log deadlocks but don't fail - another Lambda likely inserted it
-            if "deadlock" in str(e).lower():
-                logger.warning("Deadlock inserting KMS embedding %s/%s, skipping", scheme, term)
-                return False
-            raise
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                    INSERT INTO {EMBEDDINGS_TABLE}
+                        (id, type, external_id, attribute, text_content, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (external_id, attribute) DO NOTHING
+                    """,
+                (str(uuid.uuid4()), scheme, kms_uuid, "term", text_content, embedding),
+            )
+            inserted = cur.rowcount > 0
+        if inserted:
+            logger.info("Inserted KMS embedding for %s/%s", scheme, term)
+        return inserted
 
     def upsert_kms_associations(
         self,
@@ -276,7 +268,7 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
 
     def delete_kms_associations(self, external_id: str) -> int:
         """Delete all KMS associations for an entity."""
-        with self.conn.transaction(), self.conn.cursor() as cur:
+        with self.conn.cursor() as cur:
             cur.execute(
                 f"""
                     DELETE FROM {ASSOCIATIONS_TABLE}
@@ -284,8 +276,63 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
                     """,
                 (external_id,),
             )
-            deleted = cur.rowcount
-        return deleted
+            return cur.rowcount
+
+    def upsert_collection(self, concept_id: str, data: CollectionData) -> None:
+        """
+        Upsert collection metadata into the collections table.
+
+        Args:
+            concept_id: CMR concept ID
+            data: CollectionData containing metadata and derived fields
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO collections (
+                    concept_id,
+                    temporal_start,
+                    temporal_end,
+                    is_ongoing,
+                    spatial_extent,
+                    is_global,
+                    metadata,
+                    enriched_metadata
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    ST_GeomFromText(%s, 4326),
+                    %s, %s, %s
+                )
+                ON CONFLICT (concept_id) DO UPDATE SET
+                    temporal_start = EXCLUDED.temporal_start,
+                    temporal_end = EXCLUDED.temporal_end,
+                    is_ongoing = EXCLUDED.is_ongoing,
+                    spatial_extent = EXCLUDED.spatial_extent,
+                    is_global = EXCLUDED.is_global,
+                    metadata = EXCLUDED.metadata,
+                    enriched_metadata = EXCLUDED.enriched_metadata
+                """,
+                (
+                    concept_id,
+                    data.temporal_start,
+                    data.temporal_end,
+                    data.is_ongoing,
+                    data.spatial_wkt,
+                    data.is_global,
+                    json.dumps(data.metadata),
+                    json.dumps(data.enriched_metadata),
+                ),
+            )
+        logger.info("Upserted collection metadata for %s", concept_id)
+
+    def delete_collection(self, concept_id: str) -> bool:
+        """Delete collection metadata from the collections table."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM collections WHERE concept_id = %s",
+                (concept_id,),
+            )
+            return cur.rowcount > 0
 
     def close(self) -> None:
         """Close the database connection."""

@@ -1,0 +1,426 @@
+"""Tests for the enrichment utility module."""
+
+from datetime import UTC, datetime
+
+from tests.conftest import GLOBAL_BOUNDING_BOX
+from util.enrichment import (
+    _parse_spatial_resolution_from_title,
+    _parse_temporal_resolution_from_title,
+    enrich_metadata,
+    extract_spatial_extent,
+    extract_temporal_extent,
+)
+
+
+class TestExtractTemporalExtent:
+    """Tests for extract_temporal_extent function."""
+
+    def test_extracts_range_date_times(self):
+        """Test extraction from RangeDateTimes."""
+        metadata = {
+            "TemporalExtents": [
+                {
+                    "RangeDateTimes": [
+                        {
+                            "BeginningDateTime": "2000-02-24T00:00:00Z",
+                            "EndingDateTime": "2020-12-31T23:59:59Z",
+                        }
+                    ]
+                }
+            ]
+        }
+
+        start, end, is_ongoing = extract_temporal_extent(metadata)
+
+        assert start == datetime(2000, 2, 24, 0, 0, 0, tzinfo=UTC)
+        assert end == datetime(2020, 12, 31, 23, 59, 59, tzinfo=UTC)
+        assert is_ongoing is False
+
+    def test_extracts_single_date_times(self):
+        """Test extraction from SingleDateTimes."""
+        metadata = {
+            "TemporalExtents": [
+                {
+                    "SingleDateTimes": [
+                        "2015-01-01T00:00:00Z",
+                        "2015-06-15T00:00:00Z",
+                        "2015-12-31T00:00:00Z",
+                    ]
+                }
+            ]
+        }
+
+        start, end, is_ongoing = extract_temporal_extent(metadata)
+
+        assert start == datetime(2015, 1, 1, 0, 0, 0, tzinfo=UTC)
+        assert end == datetime(2015, 12, 31, 0, 0, 0, tzinfo=UTC)
+        assert is_ongoing is False
+
+    def test_ongoing_when_no_end_date(self):
+        """Test that is_ongoing is True when no end date."""
+        metadata = {
+            "TemporalExtents": [
+                {
+                    "RangeDateTimes": [
+                        {
+                            "BeginningDateTime": "2000-02-24T00:00:00Z",
+                        }
+                    ]
+                }
+            ]
+        }
+
+        start, end, is_ongoing = extract_temporal_extent(metadata)
+
+        assert start is not None
+        assert end is None
+        assert is_ongoing is True
+
+    def test_ongoing_when_ends_at_present_flag(self):
+        """Test that EndsAtPresentFlag sets is_ongoing."""
+        metadata = {
+            "TemporalExtents": [
+                {
+                    "EndsAtPresentFlag": True,
+                    "RangeDateTimes": [
+                        {
+                            "BeginningDateTime": "2000-02-24T00:00:00Z",
+                            "EndingDateTime": "2020-12-31T23:59:59Z",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        _, _, is_ongoing = extract_temporal_extent(metadata)
+
+        assert is_ongoing is True
+
+    def test_empty_temporal_extents(self):
+        """Test handling of empty TemporalExtents."""
+        metadata = {"TemporalExtents": []}
+
+        start, end, is_ongoing = extract_temporal_extent(metadata)
+
+        assert start is None
+        assert end is None
+        assert is_ongoing is False
+
+    def test_missing_temporal_extents(self):
+        """Test handling of missing TemporalExtents."""
+        metadata = {}
+
+        start, end, is_ongoing = extract_temporal_extent(metadata)
+
+        assert start is None
+        assert end is None
+        assert is_ongoing is False
+
+
+class TestExtractSpatialExtent:
+    """Tests for extract_spatial_extent function."""
+
+    def test_extracts_bounding_rectangle(self):
+        """Test extraction from BoundingRectangles."""
+        metadata = {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "BoundingRectangles": [
+                            {
+                                "WestBoundingCoordinate": -125.0,
+                                "EastBoundingCoordinate": -65.0,
+                                "NorthBoundingCoordinate": 50.0,
+                                "SouthBoundingCoordinate": 24.0,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        wkt, is_global = extract_spatial_extent(metadata)
+
+        assert wkt is not None
+        assert "POLYGON" in wkt
+        assert "-125.0" in wkt
+        assert is_global is False
+
+    def test_extracts_gpolygon(self):
+        """Test extraction from GPolygons."""
+        metadata = {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "GPolygons": [
+                            {
+                                "Boundary": {
+                                    "Points": [
+                                        {"Longitude": -122.0, "Latitude": 37.0},
+                                        {"Longitude": -121.0, "Latitude": 37.0},
+                                        {"Longitude": -121.0, "Latitude": 38.0},
+                                        {"Longitude": -122.0, "Latitude": 38.0},
+                                        {"Longitude": -122.0, "Latitude": 37.0},
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        wkt, is_global = extract_spatial_extent(metadata)
+
+        assert wkt is not None
+        assert "POLYGON" in wkt
+        assert "-122.0" in wkt
+        assert is_global is False
+
+    def test_prefers_gpolygon_over_bounding_rectangle(self):
+        """Test that GPolygons are preferred over BoundingRectangles."""
+        metadata = {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "GPolygons": [
+                            {
+                                "Boundary": {
+                                    "Points": [
+                                        {"Longitude": -122.0, "Latitude": 37.0},
+                                        {"Longitude": -121.0, "Latitude": 37.0},
+                                        {"Longitude": -121.0, "Latitude": 38.0},
+                                        {"Longitude": -122.0, "Latitude": 37.0},
+                                    ]
+                                }
+                            }
+                        ],
+                        "BoundingRectangles": [
+                            {
+                                "WestBoundingCoordinate": -180.0,
+                                "EastBoundingCoordinate": 180.0,
+                                "NorthBoundingCoordinate": 90.0,
+                                "SouthBoundingCoordinate": -90.0,
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+
+        wkt, is_global = extract_spatial_extent(metadata)
+
+        # Should use GPolygon coordinates, not bounding rectangle
+        assert "-122.0" in wkt
+        assert is_global is False
+
+    def test_detects_global_coverage(self):
+        """Test detection of global coverage."""
+        metadata = {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {"BoundingRectangles": [GLOBAL_BOUNDING_BOX]}
+                }
+            }
+        }
+
+        _, is_global = extract_spatial_extent(metadata)
+
+        assert is_global is True
+
+    def test_empty_geometry(self):
+        """Test handling of empty geometry."""
+        metadata = {"SpatialExtent": {"HorizontalSpatialDomain": {"Geometry": {}}}}
+
+        wkt, is_global = extract_spatial_extent(metadata)
+
+        assert wkt is None
+        assert is_global is False
+
+    def test_missing_spatial_extent(self):
+        """Test handling of missing SpatialExtent."""
+        metadata = {}
+
+        wkt, is_global = extract_spatial_extent(metadata)
+
+        assert wkt is None
+        assert is_global is False
+
+
+class TestParseTemporalResolutionFromTitle:
+    """Tests for _parse_temporal_resolution_from_title function."""
+
+    def test_parses_daily(self):
+        """Test parsing 'Daily' from title."""
+        title = "MODIS/Terra Land Surface Temperature Daily L3 Global 1km"
+
+        result = _parse_temporal_resolution_from_title(title)
+
+        assert result == {"Value": 1, "Unit": "Day"}
+
+    def test_parses_monthly(self):
+        """Test parsing 'Monthly' from title."""
+        title = "GPM Monthly Precipitation"
+
+        result = _parse_temporal_resolution_from_title(title)
+
+        assert result == {"Value": 1, "Unit": "Month"}
+
+    def test_parses_8_day(self):
+        """Test parsing '8-Day' from title."""
+        title = "MODIS/Terra Vegetation Indices 8-Day L3 Global 250m"
+
+        result = _parse_temporal_resolution_from_title(title)
+
+        assert result == {"Value": 8, "Unit": "Day"}
+
+    def test_parses_hourly(self):
+        """Test parsing 'Hourly' from title."""
+        title = "MERRA-2 Hourly Diagnostics"
+
+        result = _parse_temporal_resolution_from_title(title)
+
+        assert result == {"Value": 1, "Unit": "Hour"}
+
+    def test_returns_none_for_no_resolution(self):
+        """Test returns None when no resolution found."""
+        title = "MODIS/Terra Land Surface Temperature L3 Global 1km"
+
+        result = _parse_temporal_resolution_from_title(title)
+
+        assert result is None
+
+
+class TestParseSpatialResolutionFromTitle:
+    """Tests for _parse_spatial_resolution_from_title function."""
+
+    def test_parses_km(self):
+        """Test parsing 'km' resolution from title."""
+        title = "MODIS/Terra Land Surface Temperature Daily L3 Global 1km"
+
+        result = _parse_spatial_resolution_from_title(title)
+
+        assert result == {"XDimension": 1.0, "YDimension": 1.0, "Unit": "Kilometers"}
+
+    def test_parses_m(self):
+        """Test parsing 'm' resolution from title."""
+        title = "MODIS/Terra Vegetation Indices 8-Day L3 Global 250m"
+
+        result = _parse_spatial_resolution_from_title(title)
+
+        assert result == {"XDimension": 250.0, "YDimension": 250.0, "Unit": "Meters"}
+
+    def test_parses_degree(self):
+        """Test parsing 'degree' resolution from title."""
+        title = "Global 0.25 Degree Precipitation"
+
+        result = _parse_spatial_resolution_from_title(title)
+
+        assert result == {"XDimension": 0.25, "YDimension": 0.25, "Unit": "Decimal Degrees"}
+
+    def test_skips_year_like_numbers(self):
+        """Test that year-like numbers are skipped."""
+        title = "MODIS Collection 2000 Data Product"
+
+        result = _parse_spatial_resolution_from_title(title)
+
+        assert result is None
+
+    def test_returns_none_for_no_resolution(self):
+        """Test returns None when no resolution found."""
+        title = "MODIS/Terra Land Surface Temperature"
+
+        result = _parse_spatial_resolution_from_title(title)
+
+        assert result is None
+
+
+class TestEnrichMetadata:
+    """Tests for enrich_metadata function."""
+
+    def test_enriches_temporal_resolution_from_title(self):
+        """Test that temporal resolution is enriched from title when missing."""
+        metadata = {
+            "EntryTitle": "MODIS/Terra Land Surface Temperature Daily L3 Global 1km",
+            "TemporalExtents": [
+                {"RangeDateTimes": [{"BeginningDateTime": "2000-02-24T00:00:00Z"}]}
+            ],
+        }
+
+        enriched = enrich_metadata(metadata)
+
+        assert "TemporalResolution" in enriched["TemporalExtents"][0]
+        assert enriched["TemporalExtents"][0]["TemporalResolution"]["Value"] == 1
+        assert enriched["TemporalExtents"][0]["TemporalResolution"]["Unit"] == "Day"
+
+    def test_preserves_existing_temporal_resolution(self):
+        """Test that existing temporal resolution is not overwritten."""
+        metadata = {
+            "EntryTitle": "MODIS/Terra Land Surface Temperature Daily L3 Global 1km",
+            "TemporalExtents": [
+                {
+                    "TemporalResolution": {"Value": 8, "Unit": "Day"},
+                    "RangeDateTimes": [{"BeginningDateTime": "2000-02-24T00:00:00Z"}],
+                }
+            ],
+        }
+
+        enriched = enrich_metadata(metadata)
+
+        # Should preserve the original 8-Day, not override with Daily from title
+        assert enriched["TemporalExtents"][0]["TemporalResolution"]["Value"] == 8
+
+    def test_enriches_spatial_resolution_from_title(self):
+        """Test that spatial resolution is enriched from title when missing."""
+        metadata = {
+            "EntryTitle": "MODIS/Terra Land Surface Temperature Daily L3 Global 1km",
+            "SpatialExtent": {"HorizontalSpatialDomain": {}},
+        }
+
+        enriched = enrich_metadata(metadata)
+
+        horiz_res = enriched["SpatialExtent"]["HorizontalSpatialDomain"][
+            "ResolutionAndCoordinateSystem"
+        ]["HorizontalDataResolution"]
+        assert "GriddedResolutions" in horiz_res
+        assert horiz_res["GriddedResolutions"][0]["XDimension"] == 1.0
+        assert horiz_res["GriddedResolutions"][0]["Unit"] == "Kilometers"
+
+    def test_preserves_existing_spatial_resolution(self):
+        """Test that existing spatial resolution is not overwritten."""
+        metadata = {
+            "EntryTitle": "MODIS/Terra Land Surface Temperature Daily L3 Global 1km",
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "ResolutionAndCoordinateSystem": {
+                        "HorizontalDataResolution": {
+                            "GriddedResolutions": [
+                                {"XDimension": 500, "YDimension": 500, "Unit": "Meters"}
+                            ]
+                        }
+                    }
+                }
+            },
+        }
+
+        enriched = enrich_metadata(metadata)
+
+        # Should preserve the original 500m, not override with 1km from title
+        horiz_res = enriched["SpatialExtent"]["HorizontalSpatialDomain"][
+            "ResolutionAndCoordinateSystem"
+        ]["HorizontalDataResolution"]
+        assert horiz_res["GriddedResolutions"][0]["XDimension"] == 500
+
+    def test_does_not_modify_original_metadata(self):
+        """Test that original metadata is not modified."""
+        metadata = {
+            "EntryTitle": "MODIS/Terra Daily 1km",
+            "TemporalExtents": [{}],
+        }
+
+        enriched = enrich_metadata(metadata)
+
+        # Original should not have TemporalResolution
+        assert "TemporalResolution" not in metadata["TemporalExtents"][0]
+        # Enriched should have it
+        assert "TemporalResolution" in enriched["TemporalExtents"][0]

@@ -4,7 +4,7 @@ set -e
 # Bamboo task: Package source code for deployment
 #
 # Creates a tarball of the project that can be downloaded by deployment plans.
-# This runs in the build plan after source checkout.
+# Working directory should be the parent of earthdata-mcp/
 
 echo "Packaging source code for deployment..."
 
@@ -17,8 +17,7 @@ tar -czf earthdata-mcp-deployed-package.tgz \
   --exclude='htmlcov' \
   --exclude='.terraform' \
   --exclude='*.tfstate*' \
-  --exclude='*.tgz' \
-  .
+  earthdata-mcp
 
 echo "Created earthdata-mcp-deployed-package.tgz"
 ls -lh earthdata-mcp-deployed-package.tgz
