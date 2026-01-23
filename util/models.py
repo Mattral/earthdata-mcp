@@ -1,7 +1,9 @@
 """Centralized Pydantic models for the embedding pipeline."""
 
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,3 +61,16 @@ class ExtractionResult(BaseModel):
 
     chunks: list[EmbeddingChunk] = Field(default_factory=list)
     kms_terms: list[KMSTerm] = Field(default_factory=list)
+
+
+@dataclass
+class CollectionData:
+    """Data for upserting a collection to the collections table."""
+
+    metadata: dict[str, Any]
+    enriched_metadata: dict[str, Any]
+    temporal_start: datetime | None
+    temporal_end: datetime | None
+    is_ongoing: bool
+    spatial_wkt: str | None
+    is_global: bool

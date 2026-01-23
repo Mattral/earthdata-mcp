@@ -20,9 +20,10 @@ from pydantic import ValidationError
 from util.cmr import CMRError, extract_data, fetch_associations, fetch_concept
 from util.datastores import EmbeddingDatastore, get_datastore
 from util.embeddings import EmbeddingError, EmbeddingGenerator, get_embedding_generator
+from util.enrichment import enrich_metadata, extract_spatial_extent, extract_temporal_extent
 from util.kms import lookup_terms
 from util.langfuse import flush_langfuse, get_langfuse
-from util.models import ConceptMessage, EmbeddingChunk, KMSTerm
+from util.models import CollectionData, ConceptMessage, EmbeddingChunk, KMSTerm
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -184,6 +185,23 @@ def _handle_update_core(
     """Core update logic without tracing concerns."""
     metadata = fetch_concept(message.concept_id, message.revision_id)
 
+    # For collections, upsert to collections table with enriched metadata
+    if message.concept_type == "collection":
+        temporal_start, temporal_end, is_ongoing = extract_temporal_extent(metadata)
+        spatial_wkt, is_global = extract_spatial_extent(metadata)
+        enriched = enrich_metadata(metadata)
+
+        collection_data = CollectionData(
+            metadata=metadata,
+            enriched_metadata=enriched,
+            temporal_start=temporal_start,
+            temporal_end=temporal_end,
+            is_ongoing=is_ongoing,
+            spatial_wkt=spatial_wkt,
+            is_global=is_global,
+        )
+        datastore.upsert_collection(message.concept_id, collection_data)
+
     extraction = extract_data(message, metadata)
     logger.info(
         "Extracted %d chunks, %d KMS terms from %s",
@@ -222,12 +240,18 @@ def handle_delete(message: ConceptMessage, datastore: EmbeddingDatastore) -> Non
     deleted_assocs = datastore.delete_associations(external_id)
     deleted_kms = datastore.delete_kms_associations(external_id)
 
+    # For collections, also delete from collections table
+    deleted_collection = False
+    if message.concept_type == "collection":
+        deleted_collection = datastore.delete_collection(external_id)
+
     logger.info(
-        "Deleted %s: %d chunks, %d associations, %d KMS links",
+        "Deleted %s: %d chunks, %d associations, %d KMS links, collection=%s",
         external_id,
         deleted_chunks,
         deleted_assocs,
         deleted_kms,
+        deleted_collection,
     )
 
 

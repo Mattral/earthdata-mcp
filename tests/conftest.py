@@ -13,6 +13,14 @@ os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
 MOCKS_DIR = Path(__file__).parent / "mocks"
 
+# Shared test data for spatial extent tests
+GLOBAL_BOUNDING_BOX = {
+    "WestBoundingCoordinate": -180.0,
+    "EastBoundingCoordinate": 180.0,
+    "NorthBoundingCoordinate": 90.0,
+    "SouthBoundingCoordinate": -90.0,
+}
+
 
 def load_mock(category: str, name: str) -> dict:
     """Load a mock JSON file from tests/mocks/{category}/{name}.json"""
