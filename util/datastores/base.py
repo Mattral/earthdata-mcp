@@ -193,3 +193,38 @@ class EmbeddingDatastore(ABC):
         Returns:
             True if deleted, False if not found.
         """
+
+    @abstractmethod
+    def get_collections_for_entities(self, entities: list[tuple[str, str]]) -> dict[str, list[str]]:
+        """
+        Get all collections associated with given entities.
+
+        Args:
+            entities: List of (entity_id, entity_type) tuples
+
+        Returns:
+            Dict mapping entity_id to list of collection IDs
+        """
+
+    @abstractmethod
+    def fetch_collections_by_ids(
+        self,
+        concept_ids: list[str],
+        temporal_start: Any | None = None,
+        temporal_end: Any | None = None,
+        spatial_wkt: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Fetch collection data for a list of concept IDs with optional filtering.
+
+        Args:
+            concept_ids: List of CMR concept IDs
+            temporal_start: Optional start date - exclude collections that end before this
+            temporal_end: Optional end date - exclude collections that start after this
+            spatial_wkt: Optional WKT geometry - exclude collections that don't intersect
+
+        Returns:
+            Dict mapping concept_id to collection data dict containing:
+            - temporal_start, temporal_end, is_ongoing, is_global (denormalized)
+            - metadata: the UMM-C metadata dict for parsing
+        """

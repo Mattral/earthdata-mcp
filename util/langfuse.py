@@ -54,3 +54,43 @@ def flush_langfuse() -> None:
         client.flush()
     except Exception:
         pass
+
+
+def initialize_langfuse_client() -> Langfuse | None:
+    """
+    Initialize module-level Langfuse client for use in utility modules.
+
+    This function is designed to be called at module level in extraction utilities
+    to avoid code duplication and follow the singleton pattern.
+
+    Returns:
+        Langfuse client instance, or None if initialization fails.
+    """
+    return get_langfuse()
+
+
+def trace_update(
+    metadata: dict | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """
+    Update the current Langfuse trace with metadata and/or tags.
+
+    Safely handles the case where Langfuse is not available.
+
+    Args:
+        metadata: Key-value pairs to add to the trace
+        tags: Tags to add to the trace
+    """
+    client = get_langfuse()
+    if client is None:
+        return
+
+    kwargs = {}
+    if metadata is not None:
+        kwargs["metadata"] = metadata
+    if tags is not None:
+        kwargs["tags"] = tags
+
+    if kwargs:
+        client.update_current_trace(**kwargs)

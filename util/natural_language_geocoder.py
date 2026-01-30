@@ -6,15 +6,9 @@ https://github.com/Element84/e84-geoai-common
 """
 
 import json
+import logging
 import os
 
-# TEMPORARY SOLUTION: Monkey-patch for Lambda compatibility
-# This monkey-patch is needed because the current version of the natural_language_geocoding library
-# uses "./temp" as the default cache directory, which is not writable in AWS Lambda environments.
-# We override the default to use "/tmp", which is the writable directory in Lambda.
-#
-# Remove this monkey-patch once the library is updated to handle Lambda environments.
-# Issue: [https://github.com/Element84/natural-language-geocoding/issues/15]
 import natural_language_geocoding.geocode_index.hierachical_place_cache as hpc
 from e84_geoai_common.geometry import geometry_to_geojson, simplify_geometry
 from e84_geoai_common.llm.models.nova import BedrockNovaLLM
@@ -25,6 +19,15 @@ from natural_language_geocoding.geocode_index.geocode_index_place_lookup import 
 from shapely.geometry import mapping, shape
 from shapely.ops import orient
 
+logger = logging.getLogger(__name__)
+
+# TEMPORARY SOLUTION: Monkey-patch for Lambda compatibility
+# This monkey-patch is needed because the current version of the natural_language_geocoding library
+# uses "./temp" as the default cache directory, which is not writable in AWS Lambda environments.
+# We override the default to use "/tmp", which is the writable directory in Lambda.
+#
+# Remove this monkey-patch once the library is updated to handle Lambda environments.
+# Issue: [https://github.com/Element84/natural-language-geocoding/issues/15]
 _original_init = hpc.PlaceCache.__init__
 
 
@@ -72,11 +75,39 @@ def convert_text_to_geom(location_query: str) -> str:
             bedrock_llm, location_query, GeocodeIndexPlaceLookup()
         )
 
+        # Log geometry details for debugging, including type and bounds
+        shp = shape(geometry) if isinstance(geometry, dict) else geometry
+        bounds = shp.bounds if hasattr(shp, "bounds") else None
+        geom_type = shp.geom_type if hasattr(shp, "geom_type") else type(geometry).__name__
+        geom_info = {"type": geom_type, "bounds": bounds}
+
+        if geom_type in ("Point",):
+            geom_info["num_coords"] = 1
+        elif geom_type in ("LineString", "LinearRing"):
+            geom_info["num_coords"] = len(shp.coords)
+        elif geom_type == "Polygon":
+            geom_info["num_coords"] = len(shp.exterior.coords)
+        elif geom_type.startswith("Multi"):
+            geom_info["num_parts"] = len(shp.geoms)
+
+        logger.debug(
+            "Extracted geometry for '%s': %s",
+            location_query,
+            geom_info,
+        )
+
         simplified_geom = simplify_geometry(geom=geometry, max_points=simplify_geom_max_point)
-        return simplified_geom
     except Exception as e:
-        print(f"Error in natural_language_geocoder: {str(e)}")
+        logger.warning(
+            "Error geocoding location '%s': %s (%s)",
+            location_query,
+            str(e),
+            type(e).__name__,
+        )
+        logger.debug("Full traceback:", exc_info=True)
         return None
+
+    return simplified_geom
 
 
 def fix_geometry(geom):
