@@ -36,13 +36,17 @@ resource "aws_security_group" "redis" {
   description = "Security group for earthdata-mcp Redis cache"
   vpc_id      = var.vpc_id
 
-  # Allow access from embedding Lambda
+  # Allow access from embedding Lambda, enrichment Lambda, and MCP server
   ingress {
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = [aws_security_group.embedding_lambda.id]
-    description     = "Redis from embedding lambda"
+    security_groups = [
+      aws_security_group.embedding_lambda.id,
+      aws_security_group.enrichment_lambda.id,
+      aws_security_group.mcp_server.id,
+    ]
+    description     = "Redis from embedding lambda, enrichment lambda, and MCP server"
   }
 
   egress {
