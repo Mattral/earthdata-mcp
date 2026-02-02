@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 @observe(name="discover_data")
-def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many-branches
+def discover_data(input: DiscoverDataInput) -> dict:  # pylint: disable=too-many-branches
     """
     Discover NASA earth science data collections using natural language.
 
@@ -53,7 +53,7 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
     6. PHASE 6: Returns ranked results with clarifying questions if needed
 
     Args:
-        query: Natural language query with optional constraints and context
+        input: Natural language query with optional constraints and context
 
     Returns:
         Dictionary representation of DiscoverDataOutput
@@ -61,18 +61,18 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
     trace_update(
         tags=["orchestrator", "discovery"],
         metadata={
-            "query_length": len(query.query),
-            "has_temporal_constraint": query.temporal_constraint is not None,
-            "has_spatial_constraint": query.spatial_constraint is not None,
-            "is_refinement": query.previous_context is not None,
-            "max_results": query.max_results,
+            "query_length": len(input.query),
+            "has_temporal_constraint": input.temporal_constraint is not None,
+            "has_spatial_constraint": input.spatial_constraint is not None,
+            "is_refinement": input.previous_context is not None,
+            "max_results": input.max_results,
         },
     )
 
     try:
         # === PHASE 1: Constraint Extraction ===
         # Extract temporal and spatial constraints from query
-        temporal, spatial = _extract_or_use_constraints(query)
+        temporal, spatial = _extract_or_use_constraints(input)
 
         extracted = ExtractedConstraints(
             temporal_start=temporal.start_date,
@@ -84,7 +84,7 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
 
         # === PHASE 2: Discovery Search (All Entity Types) ===
         embedding_results = search_all_entity_types(
-            query.query,
+            input.query,
             similarity_threshold=0.3,  # Lower threshold, scoring will filter
             limit=50,  # Get more candidates for better scoring
         )
@@ -103,7 +103,7 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
         # === PHASE 3: Collection Scoring & Ranking ===
         scored_collections = score_and_rank_collections(
             embedding_results,
-            similarity_threshold=query.similarity_threshold,
+            similarity_threshold=input.similarity_threshold,
         )
 
         trace_update(metadata={"scored_collections_count": len(scored_collections)})
@@ -119,10 +119,10 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
         trace_update(metadata={"hydrated_collections_count": len(collections)})
 
         # Apply user refinements from previous context (disambiguation answers)
-        if query.previous_context and query.previous_context.user_refinements:
+        if input.previous_context and input.previous_context.user_refinements:
             collections = filter_by_user_refinements(
                 collections,
-                query.previous_context.user_refinements,
+                input.previous_context.user_refinements,
             )
 
             trace_update(metadata={"after_refinements_count": len(collections)})
@@ -131,9 +131,9 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
         questions = []
         needs_disambiguation = False
 
-        if should_expand_query(collections, embedding_results, query.similarity_threshold):
+        if should_expand_query(collections, embedding_results, input.similarity_threshold):
             discovery_context = analyze_embedding_results(embedding_results)
-            questions = generate_expansion_questions(query.query, discovery_context)
+            questions = generate_expansion_questions(input.query, discovery_context)
             status = DiscoveryStatus.REFINEMENT_SUGGESTED
         else:
             needs_disambiguation, questions = check_disambiguation(collections)
@@ -145,10 +145,10 @@ def discover_data(query: DiscoverDataInput) -> dict:  # pylint: disable=too-many
             )
 
         # === PHASE 6: Output Assembly ===
-        final_collections = collections[: query.max_results]
+        final_collections = collections[: input.max_results]
 
         search_context = _build_search_context(
-            temporal, spatial, final_collections, query.previous_context
+            temporal, spatial, final_collections, input.previous_context
         )
 
         output = DiscoverDataOutput(
