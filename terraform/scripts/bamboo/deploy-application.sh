@@ -22,7 +22,7 @@ set -e
 # | bamboo_CMR_URL                  | No       | https://cmr.earthdata.nasa.gov |
 # | bamboo_EMBEDDINGS_TABLE         | No       | embeddings                     |
 # | bamboo_ASSOCIATIONS_TABLE       | No       | associations                   |
-# | bamboo_LANGFUSE_HOST            | No       |                                |
+# | bamboo_LANGFUSE_BASE_URL        | No       |                                |
 # | bamboo_LANGFUSE_PUBLIC_KEY      | No       |                                |
 # | bamboo_LANGFUSE_SECRET_KEY      | No       |                                |
 # | bamboo_MCP_SERVER_CPU           | No       | 256                            |
@@ -56,7 +56,7 @@ export TF_VAR_load_balancer_name="${bamboo_LOAD_BALANCER_NAME}"
 [ -n "$bamboo_CMR_URL" ] && export TF_VAR_cmr_url="$bamboo_CMR_URL"
 [ -n "$bamboo_EMBEDDINGS_TABLE" ] && export TF_VAR_embeddings_table="$bamboo_EMBEDDINGS_TABLE"
 [ -n "$bamboo_ASSOCIATIONS_TABLE" ] && export TF_VAR_associations_table="$bamboo_ASSOCIATIONS_TABLE"
-[ -n "$bamboo_LANGFUSE_HOST" ] && export TF_VAR_langfuse_host="$bamboo_LANGFUSE_HOST"
+[ -n "$bamboo_LANGFUSE_BASE_URL" ] && export TF_VAR_langfuse_host="$bamboo_LANGFUSE_BASE_URL"
 [ -n "$bamboo_LANGFUSE_PUBLIC_KEY" ] && export TF_VAR_langfuse_public_key="$bamboo_LANGFUSE_PUBLIC_KEY"
 [ -n "$bamboo_MCP_SERVER_CPU" ] && export TF_VAR_mcp_server_cpu="$bamboo_MCP_SERVER_CPU"
 [ -n "$bamboo_MCP_SERVER_MEMORY" ] && export TF_VAR_mcp_server_memory="$bamboo_MCP_SERVER_MEMORY"
