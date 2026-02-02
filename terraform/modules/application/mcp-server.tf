@@ -88,7 +88,10 @@ resource "aws_iam_role_policy" "mcp_task" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = var.database_secret_arn
+        Resource = [
+          var.database_secret_arn,
+          aws_secretsmanager_secret.redis.arn
+        ]
       },
       {
         Sid    = "Bedrock"
