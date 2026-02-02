@@ -43,7 +43,6 @@ resource "aws_security_group" "redis" {
     protocol        = "tcp"
     security_groups = [
       aws_security_group.embedding_lambda.id,
-      aws_security_group.enrichment_lambda.id,
       aws_security_group.mcp_server.id,
     ]
     description     = "Redis from embedding lambda, enrichment lambda, and MCP server"
