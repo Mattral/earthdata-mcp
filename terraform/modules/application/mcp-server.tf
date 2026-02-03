@@ -101,7 +101,9 @@ resource "aws_iam_role_policy" "mcp_task" {
         ]
         Resource = [
           "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-*",
-          "arn:aws:bedrock:*:*:inference-profile/us.amazon.titan-embed-*"
+          "arn:aws:bedrock:*:*:inference-profile/us.amazon.titan-embed-*",
+          "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-*",
+          "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-pro-*"
         ]
       },
       {
