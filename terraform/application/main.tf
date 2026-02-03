@@ -231,6 +231,17 @@ resource "aws_security_group_rule" "lambda_to_database" {
   description              = "PostgreSQL from embedding lambda"
 }
 
+# Allow MCP server to connect to database
+resource "aws_security_group_rule" "mcp_server_to_database" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = module.application.mcp_server_security_group_id
+  security_group_id        = data.terraform_remote_state.database.outputs.security_group_id
+  description              = "PostgreSQL from MCP server"
+}
+
 # SSM Parameters for cross-stack references (queue URLs)
 resource "aws_ssm_parameter" "ingest_queue_url" {
   name        = "${var.environment_name}-ingest-queue-url"
