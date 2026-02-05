@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tools.discover_data.models.extraction import ParsedSpatialExtraction
 from tools.discover_data.utils import extract_spatial_constraint
 
 
@@ -188,6 +189,35 @@ class TestExtractSpatialConstraintWrapper:
             assert result.wkt_geometry is None
             assert result.reasoning == "Extracted"
 
+    def test_geocoding_empty_geometry_validation_error(self):
+        """When geocoding returns None (e.g., validation error), should return location but no geometry."""
+        with (
+            patch(
+                "tools.discover_data.utils.extract_spatial_constraint.extract_spatial_with_llm"
+            ) as mock_llm,
+            patch(
+                "tools.discover_data.utils.extract_spatial_constraint.convert_text_to_geom"
+            ) as mock_geocode,
+            patch("tools.discover_data.utils.extract_spatial_constraint.cache", None),
+        ):
+            mock_llm_result = MagicMock()
+            mock_llm_result.location_name = "Test Location"
+            mock_llm_result.location_with_context = "Test Location"
+            mock_llm_result.reasoning = "Extracted"
+            mock_llm_result.cache_key = "test_key"
+            mock_llm.return_value = mock_llm_result
+
+            # Geocoder returns None (could be due to validation error or other issue)
+            mock_geocode.return_value = None
+
+            result = extract_spatial_constraint.extract_spatial_constraint(
+                "data from Test Location"
+            )
+
+            assert result.location == "Test Location"
+            assert result.wkt_geometry is None
+            assert result.reasoning == "Extracted"
+
     def test_geocoding_generic_error(self):
         """When geocoding raises generic exception, should return location but no geometry."""
         with (
@@ -333,7 +363,7 @@ class TestExtractSpatialInitialization:
 
     def test_spatial_extraction_result_cache_key_generation(self):
         """ParsedSpatialExtraction should properly generate cache keys."""
-        result = extract_spatial_constraint.ParsedSpatialExtraction(
+        result = ParsedSpatialExtraction(
             location_name="Denver",
             location_with_context="Denver, CO",
             reasoning="City",
@@ -347,7 +377,7 @@ class TestExtractSpatialInitialization:
 
     def test_spatial_extraction_result_no_cache_key_for_none_location(self):
         """ParsedSpatialExtraction should not generate cache key for None location."""
-        result = extract_spatial_constraint.ParsedSpatialExtraction(
+        result = ParsedSpatialExtraction(
             location_name=None,
             location_with_context="Some Place",
             reasoning="No location",
@@ -357,13 +387,13 @@ class TestExtractSpatialInitialization:
 
     def test_cache_key_normalization(self):
         """Cache keys should normalize location names consistently."""
-        result1 = extract_spatial_constraint.ParsedSpatialExtraction(
+        result1 = ParsedSpatialExtraction(
             location_name="Denver",
             location_with_context="Denver, CO",
             reasoning="City",
         )
 
-        result2 = extract_spatial_constraint.ParsedSpatialExtraction(
+        result2 = ParsedSpatialExtraction(
             location_name="DENVER",
             location_with_context="Denver, CO",
             reasoning="City",

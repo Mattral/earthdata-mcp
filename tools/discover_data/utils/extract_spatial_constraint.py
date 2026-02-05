@@ -21,9 +21,6 @@ from util.natural_language_geocoder import convert_text_to_geom
 
 logger = logging.getLogger(__name__)
 
-# Re-export for tests
-__all__ = ["ParsedSpatialExtraction", "extract_spatial_with_llm", "extract_spatial_constraint"]
-
 try:
     cache = get_cache_client()
 except Exception as e:
@@ -174,13 +171,11 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
                 reasoning=extraction.reasoning,
             )
 
-        geom_str = str(geom)
-
         # Store in cache
         if cache and canonical_name:
             try:
                 cache_key = extraction.cache_key
-                cache.set(cache_key, geom_str, ttl=900)
+                cache.set(cache_key, geom, ttl=900)
             except Exception as e:
                 logger.debug("Cache store failed: %s", e)
 
@@ -189,19 +184,17 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
             metadata={
                 "cache_hit": False,
                 "success": True,
-                "geometry_type": type(geom).__name__,
             },
         )
 
         logger.debug(
-            "Successfully geocoded location '%s': geometry_type=%s, length=%d chars",
+            "Successfully geocoded location '%s': length=%d chars",
             canonical_name,
-            type(geom).__name__,
-            len(geom_str),
+            len(geom),
         )
         return SpatialConstraint(
             location=location_to_geocode,
-            wkt_geometry=geom_str,
+            wkt_geometry=geom,
             reasoning=extraction.reasoning,
         )
 
