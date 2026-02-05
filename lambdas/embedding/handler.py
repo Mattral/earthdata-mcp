@@ -278,13 +278,24 @@ def process_message(
 
 def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """
-    Lambda handler for FIFO queue messages.
+    Lambda handler for FIFO queue messages with partial batch response.
 
-    Uses partial batch response - failed messages are returned for retry,
-    successful messages are deleted from the queue.
+    Processes CMR concept update/delete events, generating embeddings and
+    storing them in PostgreSQL with pgvector extension.
+
+    Failed messages are returned for retry, successful messages are deleted
+    from the queue automatically.
+
+    Args:
+        event: SQS event containing concept messages
+        _context: Lambda context object
+
+    Returns:
+        dict with batchItemFailures list for SQS partial batch response.
+        Empty failures list indicates all messages were processed successfully.
     """
     records = event.get("Records", [])
-    logger.info("Processing %d messages", len(records))
+    logger.info("Processing %d messages from FIFO queue", len(records))
 
     datastore = get_datastore()
     embedder = get_embedding_generator()
@@ -295,8 +306,21 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             message_id = record["messageId"]
             try:
                 process_message(record, datastore, embedder)
-            except (CMRError, EmbeddingError, ValidationError, json.JSONDecodeError) as e:
-                logger.exception("Failed message %s: %s", message_id, e)
+            except CMRError as e:
+                logger.error("CMR error processing message %s: %s", message_id, e)
+                failures.append({"itemIdentifier": message_id})
+            except EmbeddingError as e:
+                logger.error("Embedding generation failed for message %s: %s", message_id, e)
+                failures.append({"itemIdentifier": message_id})
+            except ValidationError as e:
+                logger.error("Message validation failed for %s: %s", message_id, e)
+                # Don't retry validation errors - they won't succeed
+                logger.debug("Invalid message content: %s", record.get("body", ""))
+            except json.JSONDecodeError as e:
+                logger.error("Message JSON decode error for %s: %s", message_id, e)
+                logger.debug("Invalid JSON body: %s", record.get("body", ""))
+            except Exception as e:
+                logger.exception("Unexpected error processing message %s", message_id)
                 failures.append({"itemIdentifier": message_id})
     finally:
         flush_langfuse()

@@ -133,13 +133,22 @@ def handler(event: dict[str, Any], _context) -> dict[str, Any]:
         - dry_run: Optional, if true only logs what would be sent
 
     Returns:
-        Summary of bootstrap operation
+        Summary of bootstrap operation including processed count, sent count,
+        and error count. Includes langfuse_session_id for tracing.
+
+    Raises:
+        ValueError: If required environment variables are missing
+        RuntimeError: If SQS batch operations fail after retries
     """
     concept_type = event.get("concept_type", "collection")
     search_params = event.get("search_params", {})
     page_size = event.get("page_size", 500)
     dry_run = event.get("dry_run", False)
     queue_url = os.environ.get("EMBEDDING_QUEUE_URL")
+
+    # Validate inputs
+    if page_size < 1 or page_size > 2000:
+        raise ValueError(f"page_size must be between 1 and 2000, got {page_size}")
 
     # Generate session ID for Langfuse tracing across all embedding lambda invocations
     session_id = f"bootstrap-{uuid.uuid4().hex[:8]}"
@@ -160,25 +169,29 @@ def handler(event: dict[str, Any], _context) -> dict[str, Any]:
     total_sent = 0
     total_errors = 0
 
-    for items in search_cmr(concept_type, search_params, page_size):
-        messages = []
+    try:
+        for items in search_cmr(concept_type, search_params, page_size):
+            messages = []
 
-        for item in items:
-            try:
-                msg = extract_concept_info(concept_type, item)
-                messages.append(msg)
-                total_processed += 1
-            except CMRError as e:
-                logger.warning("Error extracting concept info: %s", e)
-                total_errors += 1
+            for item in items:
+                try:
+                    msg = extract_concept_info(concept_type, item)
+                    messages.append(msg)
+                    total_processed += 1
+                except CMRError as e:
+                    logger.warning("Error extracting concept info for item: %s", e)
+                    total_errors += 1
 
-        if dry_run:
-            logger.info("[DRY RUN] Would send %d messages to queue", len(messages))
-            total_sent += len(messages)
-        else:
-            sent = send_to_queue(queue_url, messages, session_id)
-            total_sent += sent
-            logger.info("Sent %d messages to queue", sent)
+            if dry_run:
+                logger.info("[DRY RUN] Would send %d messages to queue", len(messages))
+                total_sent += len(messages)
+            else:
+                sent = send_to_queue(queue_url, messages, session_id)
+                total_sent += sent
+                logger.info("Sent %d messages to queue", sent)
+    except CMRError as e:
+        logger.exception("CMR search failed")
+        raise RuntimeError(f"CMR search failed: {e}") from e
 
     summary = {
         "concept_type": concept_type,
