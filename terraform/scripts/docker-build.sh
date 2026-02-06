@@ -27,7 +27,7 @@ ACCOUNT=$(aws sts get-caller-identity --region $REGION --query "[Account][0]" --
 ECR_URI=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com
 
 echo "Building docker image $IMAGE_NAME:$TAG..."
-docker build -t $IMAGE_NAME:$TAG --platform linux/amd64 -f ../$DOCKERFILE ..
+docker build -t $IMAGE_NAME:$TAG --platform linux/amd64 --provenance=false -f ../$DOCKERFILE ..
 docker tag $IMAGE_NAME:$TAG $ECR_URI/$IMAGE_NAME:$TAG
 
 echo "Pushing docker image..."
