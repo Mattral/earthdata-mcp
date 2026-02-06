@@ -190,6 +190,18 @@ variable "geocode_index_region" {
   type        = string
 }
 
+variable "geocode_index_port" {
+  description = "Port for the geocode index OpenSearch domain"
+  type        = string
+  default     = ""
+}
+
+variable "simplify_geom_max_point" {
+  description = "Maximum number of points for simplified geometries"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

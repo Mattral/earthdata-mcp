@@ -268,6 +268,14 @@ resource "aws_ecs_task_definition" "mcp" {
         {
           name  = "GEOCODE_INDEX_REGION"
           value = var.geocode_index_region
+        },
+        {
+          name  = "GEOCODE_INDEX_PORT"
+          value = var.geocode_index_port
+        },
+        {
+          name  = "SIMPLIFY_GEOM_MAX_POINT"
+          value = var.simplify_geom_max_point
         }
       ]
 

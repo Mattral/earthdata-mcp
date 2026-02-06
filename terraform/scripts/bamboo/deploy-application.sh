@@ -30,6 +30,10 @@ set -e
 # | bamboo_MCP_SERVER_DESIRED_COUNT | No       | 1                              |
 # | bamboo_MCP_SERVER_MIN_COUNT     | No       | 1                              |
 # | bamboo_MCP_SERVER_MAX_COUNT     | No       | 4                              |
+# | bamboo_GEOCODE_INDEX_HOST       | No       |                                |
+# | bamboo_GEOCODE_INDEX_REGION     | No       |                                |
+# | bamboo_GEOCODE_INDEX_PORT       | No       |                                |
+# | bamboo_SIMPLIFY_GEOM_MAX_POINT  | No       |                                |
 # +---------------------------------+----------+--------------------------------+
 
 # Set AWS credentials from Bamboo variables
@@ -63,6 +67,10 @@ export TF_VAR_load_balancer_name="${bamboo_LOAD_BALANCER_NAME}"
 [ -n "$bamboo_MCP_SERVER_DESIRED_COUNT" ] && export TF_VAR_mcp_server_desired_count="$bamboo_MCP_SERVER_DESIRED_COUNT"
 [ -n "$bamboo_MCP_SERVER_MIN_COUNT" ] && export TF_VAR_mcp_server_min_count="$bamboo_MCP_SERVER_MIN_COUNT"
 [ -n "$bamboo_MCP_SERVER_MAX_COUNT" ] && export TF_VAR_mcp_server_max_count="$bamboo_MCP_SERVER_MAX_COUNT"
+[ -n "$bamboo_GEOCODE_INDEX_HOST" ] && export TF_VAR_geocode_index_host="$bamboo_GEOCODE_INDEX_HOST"
+[ -n "$bamboo_GEOCODE_INDEX_REGION" ] && export TF_VAR_geocode_index_region="$bamboo_GEOCODE_INDEX_REGION"
+[ -n "$bamboo_GEOCODE_INDEX_PORT" ] && export TF_VAR_geocode_index_port="$bamboo_GEOCODE_INDEX_PORT"
+[ -n "$bamboo_SIMPLIFY_GEOM_MAX_POINT" ] && export TF_VAR_simplify_geom_max_point="$bamboo_SIMPLIFY_GEOM_MAX_POINT"
 
 # Store Langfuse secret in SSM SecureString if provided
 if [ -n "$bamboo_LANGFUSE_SECRET_KEY" ]; then

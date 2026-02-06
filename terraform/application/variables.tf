@@ -165,9 +165,23 @@ variable "mcp_listener_priority" {
 variable "geocode_index_host" {
   description = "OpenSearch host for the geocode index used by the natural language geocoder"
   type        = string
+  default     = ""
 }
 
 variable "geocode_index_region" {
   description = "AWS region of the geocode index OpenSearch domain"
   type        = string
+  default     = ""
+}
+
+variable "geocode_index_port" {
+  description = "Port for the geocode index OpenSearch domain"
+  type        = string
+  default     = ""
+}
+
+variable "simplify_geom_max_point" {
+  description = "Maximum number of points for simplified geometries"
+  type        = string
+  default     = ""
 }
