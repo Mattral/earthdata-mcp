@@ -217,6 +217,10 @@ module "application" {
   mcp_server_max_count     = var.mcp_server_max_count
   mcp_listener_priority    = var.mcp_listener_priority
 
+  # Geocode Index (OpenSearch)
+  geocode_index_host   = var.geocode_index_host
+  geocode_index_region = var.geocode_index_region
+
   tags = var.tags
 }
 

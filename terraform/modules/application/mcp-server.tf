@@ -260,6 +260,14 @@ resource "aws_ecs_task_definition" "mcp" {
         {
           name  = "REDIS_SECRET_ID"
           value = aws_secretsmanager_secret.redis.arn
+        },
+        {
+          name  = "GEOCODE_INDEX_HOST"
+          value = var.geocode_index_host
+        },
+        {
+          name  = "GEOCODE_INDEX_REGION"
+          value = var.geocode_index_region
         }
       ]
 

@@ -160,3 +160,14 @@ variable "mcp_listener_priority" {
   type        = number
   default     = 200
 }
+
+# Geocode Index (OpenSearch)
+variable "geocode_index_host" {
+  description = "OpenSearch host for the geocode index used by the natural language geocoder"
+  type        = string
+}
+
+variable "geocode_index_region" {
+  description = "AWS region of the geocode index OpenSearch domain"
+  type        = string
+}

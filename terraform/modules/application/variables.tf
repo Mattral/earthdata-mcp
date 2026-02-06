@@ -179,6 +179,17 @@ variable "redis_node_type" {
   default     = "cache.t3.micro"
 }
 
+# Geocode Index (OpenSearch)
+variable "geocode_index_host" {
+  description = "OpenSearch host for the geocode index used by the natural language geocoder"
+  type        = string
+}
+
+variable "geocode_index_region" {
+  description = "AWS region of the geocode index OpenSearch domain"
+  type        = string
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
