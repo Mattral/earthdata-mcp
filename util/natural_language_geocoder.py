@@ -10,6 +10,7 @@ import os
 
 from e84_geoai_common.geometry import simplify_geometry
 from e84_geoai_common.llm.models.nova import BedrockNovaLLM
+from langfuse import observe
 from natural_language_geocoding import extract_geometry_from_text
 from natural_language_geocoding.geocode_index.geocode_index_place_lookup import (
     GeocodeIndexPlaceLookup,
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 SIMPLIFY_GEOM_MAX_POINT = int(os.getenv("SIMPLIFY_GEOM_MAX_POINT", "4900"))
 
 
+@observe(name="convert_text_to_geom")
 def convert_text_to_geom(location_query: str) -> str:
     """
     Convert a natural language location query into a geometric representation using OpenSearch.
