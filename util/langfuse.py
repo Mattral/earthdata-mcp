@@ -72,6 +72,7 @@ def initialize_langfuse_client() -> Langfuse | None:
 def trace_update(
     metadata: dict | None = None,
     tags: list[str] | None = None,
+    session_id: str | None = None,
 ) -> None:
     """
     Update the current Langfuse trace with metadata and/or tags.
@@ -81,6 +82,7 @@ def trace_update(
     Args:
         metadata: Key-value pairs to add to the trace
         tags: Tags to add to the trace
+        session_id: Session ID to group traces together
     """
     client = get_langfuse()
     if client is None:
@@ -91,6 +93,8 @@ def trace_update(
         kwargs["metadata"] = metadata
     if tags is not None:
         kwargs["tags"] = tags
+    if session_id is not None:
+        kwargs["session_id"] = session_id
 
     if kwargs:
         client.update_current_trace(**kwargs)

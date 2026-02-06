@@ -220,6 +220,10 @@ module "application" {
   # Geocode Index (OpenSearch)
   geocode_index_host   = var.geocode_index_host
   geocode_index_region = var.geocode_index_region
+  geocode_index_port   = var.geocode_index_port
+
+  # Geometry simplification
+  simplify_geom_max_point = var.simplify_geom_max_point
 
   tags = var.tags
 }

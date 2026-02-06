@@ -114,7 +114,11 @@ class TestCreateSimpleTool:
         assert call_kwargs["output_schema"] == output_schema
 
     @pytest.mark.asyncio
-    async def test_create_simple_tool_wrapper_execution(self, tmp_path):
+    @patch("loader.flush_langfuse")
+    @patch("loader.trace_update")
+    async def test_create_simple_tool_wrapper_execution(
+        self, mock_trace_update, mock_flush, tmp_path
+    ):
         """Test that the wrapper function executes and returns results correctly."""
         manifest_data = {"name": "test_tool", "description": "Test"}
         manifest_path = tmp_path / "manifest.json"
@@ -141,10 +145,15 @@ class TestCreateSimpleTool:
 
         register_func(mock_mcp)
 
-        # Now call the wrapper to cover lines 84-85
+        # Create a mock Context with a session_id
+        mock_ctx = Mock()
+        mock_ctx.session_id = "test-session-123"
+
         # pylint: disable=not-callable
-        result = await wrapper_func(keyword="test")
+        result = await wrapper_func(keyword="test", ctx=mock_ctx)
         assert result == {"result": "Processed test"}
+        mock_trace_update.assert_called_once_with(session_id="test-session-123")
+        mock_flush.assert_called_once()
 
 
 class TestLoadToolsFromDirectory:
