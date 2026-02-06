@@ -9,11 +9,10 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from fastmcp import Context
 from langfuse import observe
 from pydantic import BaseModel
 
-from util.langfuse import flush_langfuse, trace_update
+from util.langfuse import flush_langfuse
 
 logger = logging.getLogger(__name__)
 
@@ -86,39 +85,19 @@ def create_simple_tool(
     manifest = ToolManifest(manifest_path)
 
     def register(mcp):
+        @mcp.tool(
+            name=manifest.name,
+            description=manifest.description,
+            output_schema=output_schema,
+        )
         @wraps(func)
         @observe(name=manifest.name)
-        async def wrapper(*args, ctx: Context, **kwargs):
-            try:
-                trace_update(session_id=ctx.session_id)
-            except Exception:
-                logger.debug("Could not set Langfuse session_id", exc_info=True)
-
+        async def wrapper(*args, **kwargs):
             try:
                 result = func(*args, **kwargs)
                 return result
             finally:
                 flush_langfuse()
-
-        # Build signature: original params + ctx: Context
-        # Must be set BEFORE mcp.tool() so FastMCP sees ctx at registration time
-        orig_sig = inspect.signature(func)
-        ctx_param = inspect.Parameter(
-            "ctx",
-            inspect.Parameter.KEYWORD_ONLY,
-            annotation=Context,
-        )
-        wrapper.__signature__ = orig_sig.replace(
-            parameters=[*orig_sig.parameters.values(), ctx_param],
-        )
-
-        # Register with MCP after signature is set
-        mcp.tool(
-            name=manifest.name,
-            description=manifest.description,
-            output_schema=output_schema,
-            # tags=set(manifest.tags) if manifest.tags else None,
-        )(wrapper)
 
         return wrapper
 
