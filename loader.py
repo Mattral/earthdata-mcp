@@ -86,12 +86,6 @@ def create_simple_tool(
     manifest = ToolManifest(manifest_path)
 
     def register(mcp):
-        @mcp.tool(
-            name=manifest.name,
-            description=manifest.description,
-            output_schema=output_schema,
-            # tags=set(manifest.tags) if manifest.tags else None,
-        )
         @wraps(func)
         @observe(name=manifest.name)
         async def wrapper(*args, ctx: Context, **kwargs):
@@ -107,6 +101,7 @@ def create_simple_tool(
                 flush_langfuse()
 
         # Build signature: original params + ctx: Context
+        # Must be set BEFORE mcp.tool() so FastMCP sees ctx at registration time
         orig_sig = inspect.signature(func)
         ctx_param = inspect.Parameter(
             "ctx",
@@ -116,6 +111,14 @@ def create_simple_tool(
         wrapper.__signature__ = orig_sig.replace(
             parameters=[*orig_sig.parameters.values(), ctx_param],
         )
+
+        # Register with MCP after signature is set
+        mcp.tool(
+            name=manifest.name,
+            description=manifest.description,
+            output_schema=output_schema,
+            # tags=set(manifest.tags) if manifest.tags else None,
+        )(wrapper)
 
         return wrapper
 
