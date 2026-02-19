@@ -1,6 +1,7 @@
 """Tests for cache utility."""
 
 import json
+import os
 from unittest.mock import Mock, patch
 
 import pytest
@@ -63,6 +64,7 @@ class TestGetRedisCredentials:
 class TestRedisCacheInitialization:
     """Test RedisCache initialization and connection."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -92,12 +94,21 @@ class TestRedisCacheInitialization:
             # Verify connection test was performed
             mock_client.ping.assert_called_once()
 
-            # Verify success was logged
-            mock_logger.info.assert_called_once_with("Successfully connected to Redis")
+            # Verify success was logged (should have 2 info calls)
+            assert mock_logger.info.call_count == 2
+            assert (
+                mock_logger.info.call_args_list[0][0][0]
+                == "Using AWS Secrets Manager Redis configuration"
+            )
+            assert (
+                mock_logger.info.call_args_list[1][0][0]
+                == "Successfully connected to Redis via Secrets Manager"
+            )
 
             # Verify client is available
             assert client.client is not None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -120,6 +131,7 @@ class TestRedisCacheInitialization:
             # Verify client is None
             assert client.client is None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -129,28 +141,160 @@ class TestRedisCacheInitialization:
         mock_redis_class.side_effect = Exception("Redis creation failed")
 
         with patch("util.cache.logger") as mock_logger:
-            client = RedisCache()
+            cache = RedisCache()
 
             # Verify warning was logged
             mock_logger.warning.assert_called_once()
             assert "Failed to connect to Redis" in mock_logger.warning.call_args[0][0]
 
             # Verify client is None
-            assert client.client is None
+            assert cache.client is None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_no_connection_without_secret_id(self):
         """Test that Redis is disabled when REDIS_SECRET_ID is not set."""
         with patch("util.cache.logger") as mock_logger:
             client = RedisCache()
 
-            mock_logger.info.assert_called_once_with("REDIS_SECRET_ID not set, caching disabled")
+            mock_logger.info.assert_called_once_with(
+                "REDIS_SECRET_ID not set and no local Redis config found, caching disabled"
+            )
             assert client.client is None
+
+    def test_local_redis_successful_connection(self, monkeypatch):
+        """Test successful connection to local Redis using REDIS_HOST."""
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+
+        mock_client = Mock()
+        mock_redis_class = Mock(return_value=mock_client)
+        monkeypatch.setattr("util.cache.redis.Redis", mock_redis_class)
+
+        mock_client.ping.return_value = True
+
+        mock_logger = Mock()
+        monkeypatch.setattr("util.cache.logger", mock_logger)
+
+        client = RedisCache()
+
+        mock_redis_class.assert_called_once_with(
+            host="localhost",
+            port=6379,  # Default port
+            password=None,
+            ssl=False,  # Local development doesn't use SSL
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+
+        mock_client.ping.assert_called_once()
+
+        assert mock_logger.info.call_count == 2
+        assert (
+            mock_logger.info.call_args_list[0][0][0]
+            == "Using local Redis configuration (REDIS_HOST)"
+        )
+        assert "Successfully connected to local Redis" in mock_logger.info.call_args_list[1][0][0]
+
+        assert client.client is not None
+
+    def test_local_redis_with_custom_port_and_password(self, monkeypatch):
+        """Test local Redis connection with custom port and password."""
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6380")
+        monkeypatch.setenv("REDIS_PASSWORD", "dev-pass")
+
+        mock_client = Mock()
+        mock_redis_class = Mock(return_value=mock_client)
+        monkeypatch.setattr("util.cache.redis.Redis", mock_redis_class)
+
+        mock_client.ping.return_value = True
+
+        client = RedisCache()
+
+        mock_redis_class.assert_called_once_with(
+            host="localhost",
+            port=6380,
+            password="dev-pass",  # noqa: S106 - Suppress linting warning, not a real password
+            ssl=False,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        assert client.client is not None
+
+    def test_local_redis_takes_precedence_over_secrets(self, monkeypatch, mock_redis_credentials):
+        """Test that REDIS_HOST takes precedence over REDIS_SECRET_ID."""
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setattr("util.cache.REDIS_SECRET_ID", "test-secret-arn")
+
+        mock_get_creds = Mock(return_value=mock_redis_credentials)
+        monkeypatch.setattr("util.cache.get_redis_credentials", mock_get_creds)
+
+        mock_client = Mock()
+        mock_redis_class = Mock(return_value=mock_client)
+        monkeypatch.setattr("util.cache.redis.Redis", mock_redis_class)
+
+        mock_client.ping.return_value = True
+
+        mock_logger = Mock()
+        monkeypatch.setattr("util.cache.logger", mock_logger)
+
+        RedisCache()
+
+        # Verify local Redis was used (not Secrets Manager)
+        assert "Using local Redis configuration" in mock_logger.info.call_args_list[0][0][0]
+        mock_redis_class.assert_called_once_with(
+            host="localhost",
+            port=6379,
+            password=None,
+            ssl=False,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        # Secrets Manager should not have been called
+        mock_get_creds.assert_not_called()
+
+    def test_local_redis_connection_failure(self, monkeypatch):
+        """Test graceful handling of local Redis connection failure."""
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+
+        mock_client = Mock()
+        mock_redis_class = Mock(return_value=mock_client)
+        monkeypatch.setattr("util.cache.redis.Redis", mock_redis_class)
+
+        mock_client.ping.side_effect = redis.ConnectionError("Connection refused")
+
+        mock_logger = Mock()
+        monkeypatch.setattr("util.cache.logger", mock_logger)
+
+        client = RedisCache()
+
+        mock_logger.warning.assert_called_once()
+        assert "Failed to connect to local Redis" in mock_logger.warning.call_args[0][0]
+
+        assert client.client is None
+
+    def test_local_redis_creation_failure(self, monkeypatch):
+        """Test graceful handling when the Redis constructor raises with REDIS_HOST set."""
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+
+        mock_redis_class = Mock(side_effect=Exception("Redis creation failed"))
+        monkeypatch.setattr("util.cache.redis.Redis", mock_redis_class)
+
+        mock_logger = Mock()
+        monkeypatch.setattr("util.cache.logger", mock_logger)
+
+        client = RedisCache()
+
+        mock_logger.warning.assert_called_once()
+        assert "Failed to connect to local Redis" in mock_logger.warning.call_args[0][0]
+
+        assert client.client is None
 
 
 class TestIsAvailable:
     """Test the is_available method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_is_available_with_no_client(self):
         """Test is_available when client is None."""
@@ -158,6 +302,7 @@ class TestIsAvailable:
 
         assert client.is_available() is False
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -178,6 +323,7 @@ class TestIsAvailable:
         # Verify ping was called at least twice (once in init, once in is_available)
         assert mock_client.ping.call_count >= 2
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -201,6 +347,7 @@ class TestIsAvailable:
 class TestGetMethod:
     """Test the get method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_get_with_unavailable_client(self):
         """Test get when client is unavailable."""
@@ -210,6 +357,7 @@ class TestGetMethod:
 
         assert result is None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -231,6 +379,7 @@ class TestGetMethod:
         assert result == test_data
         mock_client.get.assert_called_with("test_key")
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -247,6 +396,7 @@ class TestGetMethod:
         assert result is None
         mock_client.get.assert_called_with("nonexistent_key")
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -270,6 +420,7 @@ class TestGetMethod:
 class TestSetMethod:
     """Test the set method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_set_with_unavailable_client(self):
         """Test set when client is unavailable."""
@@ -279,6 +430,7 @@ class TestSetMethod:
 
         assert result is False
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -296,6 +448,7 @@ class TestSetMethod:
         assert result is True
         mock_client.setex.assert_called_once_with("test_key", 600, json.dumps(test_data))
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -313,6 +466,7 @@ class TestSetMethod:
         assert result is True
         mock_client.setex.assert_called_once_with("test_key", 900, json.dumps(test_data))
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -336,6 +490,7 @@ class TestSetMethod:
 class TestHgetMethod:
     """Test the hget method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_hget_with_unavailable_client(self):
         """Test hget when client is unavailable."""
@@ -345,6 +500,7 @@ class TestHgetMethod:
 
         assert result is None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -365,6 +521,7 @@ class TestHgetMethod:
         assert result == test_data
         mock_client.hget.assert_called_with("kms:scheme:instruments", "MODIS")
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -380,6 +537,7 @@ class TestHgetMethod:
 
         assert result is None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -403,6 +561,7 @@ class TestHgetMethod:
 class TestHmgetMethod:
     """Test the hmget method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_hmget_with_unavailable_client(self):
         """Test hmget when client is unavailable."""
@@ -412,6 +571,7 @@ class TestHmgetMethod:
 
         assert result == {"field1": None, "field2": None}
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -433,6 +593,7 @@ class TestHmgetMethod:
         assert result == {"MODIS": data1, "ASTER": data2}
         mock_client.hmget.assert_called_with("kms:scheme:instruments", ["MODIS", "ASTER"])
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -451,6 +612,7 @@ class TestHmgetMethod:
         assert result["MODIS"] == data1
         assert result["MISSING"] is None
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -474,6 +636,7 @@ class TestHmgetMethod:
 class TestHmsetMethod:
     """Test the hmset method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_hmset_with_unavailable_client(self):
         """Test hmset when client is unavailable."""
@@ -483,6 +646,7 @@ class TestHmsetMethod:
 
         assert result is False
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -510,6 +674,7 @@ class TestHmsetMethod:
         # Verify TTL was set
         mock_client.expire.assert_called_once_with("kms:scheme:instruments", 86400)
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -527,6 +692,7 @@ class TestHmsetMethod:
         assert result is True
         mock_client.hset.assert_not_called()
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -550,6 +716,7 @@ class TestHmsetMethod:
 class TestHexistsMethod:
     """Test the hexists method."""
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", None)
     def test_hexists_with_unavailable_client(self):
         """Test hexists when client is unavailable."""
@@ -559,6 +726,7 @@ class TestHexistsMethod:
 
         assert result is False
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -577,6 +745,7 @@ class TestHexistsMethod:
         assert result is True
         mock_client.exists.assert_called_with("kms:scheme:instruments")
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")
@@ -594,6 +763,7 @@ class TestHexistsMethod:
 
         assert result is False
 
+    @patch.dict(os.environ, {"REDIS_HOST": ""}, clear=False)
     @patch("util.cache.REDIS_SECRET_ID", "test-secret-arn")
     @patch("util.cache.get_redis_credentials")
     @patch("util.cache.redis.Redis")

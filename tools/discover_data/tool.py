@@ -21,6 +21,10 @@ from tools.discover_data.utils.disambiguation import (
     filter_by_user_refinements,
 )
 from tools.discover_data.utils.embedding_search import search_all_entity_types
+from tools.discover_data.utils.granule_availability import (
+    GranuleValidationError,
+    validate_granule_availability,
+)
 from tools.discover_data.utils.query_expansion import (
     analyze_embedding_results,
     generate_expansion_questions,
@@ -49,8 +53,9 @@ def discover_data(params: DiscoverDataInput) -> dict:  # pylint: disable=too-man
     2. PHASE 2: Searches ALL entity types (collections, variables, instruments, etc.)
     3. PHASE 3: Scores collections based on direct matches + indirect signals
     4. PHASE 4: Hydrates collections and applies temporal/spatial filtering
-    5. PHASE 5: Applies user refinements and checks for query expansion or disambiguation
-    6. PHASE 6: Returns ranked results with clarifying questions if needed
+    5. PHASE 4.5: Validates granule availability for filtered collections
+    6. PHASE 5: Applies user refinements and checks for query expansion or disambiguation
+    7. PHASE 6: Returns ranked results with clarifying questions if needed
 
     Args:
         params: Natural language query with optional constraints and context
@@ -123,6 +128,31 @@ def discover_data(params: DiscoverDataInput) -> dict:  # pylint: disable=too-man
 
         trace_update(metadata={"hydrated_collections_count": len(collections)})
 
+        # === PHASE 4.5: Granule Validation ===
+        collections_before_granule_validation = len(collections)
+
+        collections = validate_granule_availability(
+            collections,
+            temporal.start_date,
+            temporal.end_date,
+            spatial.wkt_geometry,
+        )
+
+        all_filtered_by_granule_validation = (
+            collections_before_granule_validation > 0 and not collections
+        )
+
+        if collections_before_granule_validation != len(collections):
+            trace_update(
+                metadata={
+                    "collections_before_granule_validation": collections_before_granule_validation,
+                    "collections_after_granule_validation": len(collections),
+                    "filtered_by_granule_check": (
+                        collections_before_granule_validation - len(collections)
+                    ),
+                }
+            )
+
         # Apply user refinements from search context (disambiguation answers)
         if params.search_context and params.search_context.user_refinements:
             collections = filter_by_user_refinements(
@@ -147,6 +177,7 @@ def discover_data(params: DiscoverDataInput) -> dict:  # pylint: disable=too-man
                 collections,
                 needs_disambiguation,
                 scored_collections,
+                all_filtered_by_granule_validation=all_filtered_by_granule_validation,
             )
 
         # === PHASE 6: Output Assembly ===
@@ -178,8 +209,24 @@ def discover_data(params: DiscoverDataInput) -> dict:  # pylint: disable=too-man
 
         return output.model_dump()
 
+    except GranuleValidationError:
+        logger.warning("Granule availability check failed", exc_info=True)
+
+        trace_update(
+            tags=["error"],
+            metadata={"error_type": "GranuleValidationError"},
+        )
+
+        return DiscoverDataOutput(
+            status=DiscoveryStatus.ERROR,
+            error_message=(
+                "Granule availability check failed due to a service error. "
+                "Please try your request again."
+            ),
+        ).model_dump()
+
     except Exception as e:
-        logger.exception("Error in discover_data")
+        logger.exception("Error in discover_data: %s", e)
 
         trace_update(
             tags=["error"],
@@ -191,7 +238,7 @@ def discover_data(params: DiscoverDataInput) -> dict:  # pylint: disable=too-man
 
         return DiscoverDataOutput(
             status=DiscoveryStatus.ERROR,
-            error_message=str(e),
+            error_message="An unexpected error occurred. Please try your request again.",
         ).model_dump()
 
 
@@ -214,21 +261,23 @@ def _extract_or_use_constraints(
 
 
 def _determine_status(
-    filtered_collections: list[CollectionMatch],
+    collections: list[CollectionMatch],
     needs_disambiguation: bool,
     _ranked_results: list[dict],
+    all_filtered_by_granule_validation: bool = False,
 ) -> DiscoveryStatus:
     """Determine the appropriate discovery status."""
-    if not filtered_collections:
+    if all_filtered_by_granule_validation:
+        return DiscoveryStatus.NO_GRANULES_IN_CONSTRAINTS
+
+    if not collections:
         return DiscoveryStatus.NO_RESULTS
 
     if needs_disambiguation:
         return DiscoveryStatus.DISAMBIGUATION_NEEDED
 
     # Check if any results are indirect matches
-    has_indirect = any(
-        c.match_type not in ("direct", "direct_and_indirect") for c in filtered_collections
-    )
+    has_indirect = any(c.match_type not in ("direct", "direct_and_indirect") for c in collections)
     if has_indirect:
         return DiscoveryStatus.INDIRECT_MATCHES
 

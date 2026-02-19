@@ -180,6 +180,13 @@ def test_discover_data_expansion_path(monkeypatch):
     monkeypatch.setattr(tool, "should_expand_query", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(tool, "_describe_search_strategy", lambda *a, **k: "desc")
 
+    def mock_validate_granules(collections, *_args, **_kwargs):
+        for col in collections:
+            col.granule_count = 100
+        return collections
+
+    monkeypatch.setattr(tool, "validate_granule_availability", mock_validate_granules)
+
     ctx_obj = object()
     monkeypatch.setattr(tool, "analyze_embedding_results", lambda results: ctx_obj)
     questions = [ClarifyingQuestion(question_id="q1"), ClarifyingQuestion(question_id="q2")]
@@ -226,6 +233,13 @@ def test_discover_data_disambiguation_path(monkeypatch):
     monkeypatch.setattr(tool, "_describe_search_strategy", lambda *a, **k: "desc")
     monkeypatch.setattr(tool, "should_expand_query", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(tool, "check_disambiguation", lambda cols: (False, []))
+
+    def mock_validate_granules(collections, *_args, **_kwargs):
+        for col in collections:
+            col.granule_count = 100
+        return collections
+
+    monkeypatch.setattr(tool, "validate_granule_availability", mock_validate_granules)
 
     # Ensure user refinements are applied
     applied = {}
@@ -298,6 +312,13 @@ def test_discover_data_with_disambiguation_questions(monkeypatch):
     ]
     monkeypatch.setattr(tool, "check_disambiguation", lambda cols: (True, disamb_questions))
 
+    def mock_validate_granules(collections, *_args, **_kwargs):
+        for col in collections:
+            col.granule_count = 100
+        return collections
+
+    monkeypatch.setattr(tool, "validate_granule_availability", mock_validate_granules)
+
     monkeypatch.setattr(tool, "filter_by_user_refinements", lambda cols, refs: cols)
 
     query = DiscoverDataInput(query="snow")
@@ -318,11 +339,30 @@ def test_determine_status_variants():
     direct = _make_collection("C1", match_type="direct")
     indirect = _make_collection("C2", match_type="via_variable")
 
-    assert tool._determine_status([], [], []) == tool.DiscoveryStatus.NO_RESULTS
-    assert tool._determine_status([direct], True, []) == tool.DiscoveryStatus.DISAMBIGUATION_NEEDED
-    assert tool._determine_status([indirect], False, []) == tool.DiscoveryStatus.INDIRECT_MATCHES
     assert (
-        tool._determine_status([direct], False, [{"match_type": "direct"}])
+        tool._determine_status([], False, [], all_filtered_by_granule_validation=True)
+        == tool.DiscoveryStatus.NO_GRANULES_IN_CONSTRAINTS
+    )
+    assert (
+        tool._determine_status([direct], False, [], all_filtered_by_granule_validation=True)
+        == tool.DiscoveryStatus.NO_GRANULES_IN_CONSTRAINTS
+    )
+    assert (
+        tool._determine_status([], False, [], all_filtered_by_granule_validation=False)
+        == tool.DiscoveryStatus.NO_RESULTS
+    )
+    assert (
+        tool._determine_status([direct], True, [], all_filtered_by_granule_validation=False)
+        == tool.DiscoveryStatus.DISAMBIGUATION_NEEDED
+    )
+    assert (
+        tool._determine_status([indirect], False, [], all_filtered_by_granule_validation=False)
+        == tool.DiscoveryStatus.INDIRECT_MATCHES
+    )
+    assert (
+        tool._determine_status(
+            [direct], False, [{"match_type": "direct"}], all_filtered_by_granule_validation=False
+        )
         == tool.DiscoveryStatus.COLLECTIONS_FOUND
     )
 
@@ -346,7 +386,8 @@ def test_describe_search_strategy_counts():
 
 
 def test_discover_data_error_handling(monkeypatch):
-    """Discover data should catch exceptions and return error status."""
+    """Discover data should catch unexpected exceptions, return a generic user-facing
+    message (not the internal error detail), and set status to error."""
     tool = _load_tool()
 
     # Create a mock that raises an exception
@@ -359,7 +400,40 @@ def test_discover_data_error_handling(monkeypatch):
     output = tool.discover_data(query)
 
     assert output["status"] == "error"
-    assert "Extraction failed" in output["error_message"]
+    assert output["error_message"] == "An unexpected error occurred. Please try your request again."
+    # Internal error detail must not be exposed to the caller
+    assert "Extraction failed" not in output["error_message"]
+
+
+def test_discover_data_granule_validation_error(monkeypatch):
+    """GranuleValidationError from validate_granule_availability should produce a
+    specific user-facing message distinct from the generic error handler."""
+    from tools.discover_data.utils.granule_availability import GranuleValidationError
+
+    tool = _load_tool()
+
+    temporal = TemporalConstraint(start_date=datetime(2020, 1, 1), end_date=datetime(2020, 12, 31))
+    spatial = SpatialConstraint()
+
+    monkeypatch.setattr(tool, "extract_constraints", lambda *_, **__: (temporal, spatial))
+    monkeypatch.setattr(tool, "search_all_entity_types", lambda *_, **__: [])
+    monkeypatch.setattr(tool, "score_and_rank_collections", lambda *_, **__: [])
+    monkeypatch.setattr(tool, "hydrate_collections", lambda *_, **__: [_make_collection("C1")])
+
+    def _raise_granule_error(*_):
+        raise GranuleValidationError("CMR granule validation failed for 1 of 1 collection(s)")
+
+    monkeypatch.setattr(tool, "validate_granule_availability", _raise_granule_error)
+
+    output = tool.discover_data(DiscoverDataInput(query="test"))
+
+    assert output["status"] == "error"
+    assert output["error_message"] == (
+        "Granule availability check failed due to a service error. "
+        "Please try your request again."
+    )
+    # Internal CMR detail must not be exposed to the caller
+    assert "CMR" not in output["error_message"]
 
 
 def test_discover_data_with_langfuse(monkeypatch):
@@ -397,6 +471,13 @@ def test_discover_data_with_langfuse(monkeypatch):
     monkeypatch.setattr(tool, "filter_by_user_refinements", lambda cols, refs: cols)
     monkeypatch.setattr(tool, "check_disambiguation", lambda cols, *a, **k: (False, []))
     monkeypatch.setattr(tool, "_describe_search_strategy", lambda *a, **k: "desc")
+
+    def mock_validate_granules(collections, *_args, **_kwargs):
+        for col in collections:
+            col.granule_count = 100
+        return collections
+
+    monkeypatch.setattr(tool, "validate_granule_availability", mock_validate_granules)
 
     query = DiscoverDataInput(query="test collection")
     output = tool.discover_data(query)
@@ -570,10 +651,22 @@ def test_end_to_end_disambiguation_with_user_refinement(monkeypatch):
             question_type="platform_preference",
             options=["Aqua", "Terra", "Landsat-8", "Landsat-9"],
             explanations={
-                "Aqua": "NASA satellite launched in 2002 carrying MODIS and other instruments for studying Earth's water cycle and clouds",
-                "Terra": "NASA satellite launched in 1999 carrying MODIS and other instruments for observing Earth's land, atmosphere, and oceans",
-                "Landsat-8": "USGS/NASA satellite launched in 2013 providing multispectral imagery with 30m resolution for land surface monitoring",
-                "Landsat-9": "USGS/NASA satellite launched in 2021 providing improved multispectral imagery with 30m resolution for land surface monitoring",
+                "Aqua": (
+                    "NASA satellite launched in 2002 carrying MODIS and other "
+                    "instruments for studying Earth's water cycle and clouds"
+                ),
+                "Terra": (
+                    "NASA satellite launched in 1999 carrying MODIS and other "
+                    "instruments for observing Earth's land, atmosphere, and oceans"
+                ),
+                "Landsat-8": (
+                    "USGS/NASA satellite launched in 2013 providing multispectral "
+                    "imagery with 30m resolution for land surface monitoring"
+                ),
+                "Landsat-9": (
+                    "USGS/NASA satellite launched in 2021 providing improved "
+                    "multispectral imagery with 30m resolution for land surface monitoring"
+                ),
             },
             recommendation=None,
         ),
@@ -600,6 +693,13 @@ def test_end_to_end_disambiguation_with_user_refinement(monkeypatch):
     )
 
     monkeypatch.setattr(tool, "_describe_search_strategy", lambda *a, **k: "Multi-entity search")
+
+    def mock_validate_granules(collections, *_args, **_kwargs):
+        for col in collections:
+            col.granule_count = 100
+        return collections
+
+    monkeypatch.setattr(tool, "validate_granule_availability", mock_validate_granules)
 
     # === INITIAL QUERY (NO REFINEMENT) ===
     initial_query = DiscoverDataInput(query="I need land cover data")
@@ -704,3 +804,94 @@ def test_end_to_end_disambiguation_with_user_refinement(monkeypatch):
 
     # Verify context iteration incremented
     assert followup_output["search_context"]["search_iteration"] == 2
+
+
+def test_discover_data_with_granule_validation(monkeypatch):
+    """Test that granule validation phase filters out collections without granules."""
+    tool = _load_tool()
+
+    temporal = TemporalConstraint(start_date=datetime(2023, 1, 1), end_date=datetime(2023, 12, 31))
+    spatial = SpatialConstraint(wkt_geometry="POLYGON((0 0,1 0,1 1,0 1,0 0))")
+
+    monkeypatch.setattr(tool, "extract_constraints", lambda *_args, **_kwargs: (temporal, spatial))
+    monkeypatch.setattr(
+        tool,
+        "search_all_entity_types",
+        lambda *_args, **_kwargs: [
+            {"type": "collection", "similarity": 0.8, "match_type": "direct"}
+        ],
+    )
+
+    # Return two collections from hydration
+    collections_dict = [
+        _make_collection_dict("C1", metadata={"TemporalExtents": []}),
+        _make_collection_dict("C2", metadata={"TemporalExtents": []}),
+    ]
+    collections_match = [
+        _make_collection("C1"),
+        _make_collection("C2"),
+    ]
+    monkeypatch.setattr(
+        tool, "score_and_rank_collections", lambda *_args, **_kwargs: collections_dict
+    )
+    monkeypatch.setattr(tool, "hydrate_collections", lambda *_args, **_kwargs: collections_match)
+    monkeypatch.setattr(tool, "_describe_search_strategy", lambda *a, **k: "desc")
+    monkeypatch.setattr(tool, "should_expand_query", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tool, "check_disambiguation", lambda cols: (False, []))
+    monkeypatch.setattr(tool, "filter_by_user_refinements", lambda cols, refs: cols)
+
+    # Mock validate_granule_availability to return only C1 (C2 filtered out)
+    def mock_validate(cols, _temporal, _spatial, _wkt):
+        return [c for c in cols if c.concept_id == "C1"]
+
+    monkeypatch.setattr(tool, "validate_granule_availability", mock_validate)
+
+    query = DiscoverDataInput(query="ocean data")
+    output = tool.discover_data(query)
+
+    assert output["status"] == "collections_found"
+    assert len(output["collections"]) == 1
+    assert output["collections"][0]["concept_id"] == "C1"
+
+
+def test_discover_data_all_filtered_by_granule_validation(monkeypatch):
+    """Test NO_GRANULES_IN_CONSTRAINTS when all collections filtered by validation."""
+    tool = _load_tool()
+
+    temporal = TemporalConstraint(start_date=datetime(2023, 1, 1), end_date=datetime(2023, 12, 31))
+    spatial = SpatialConstraint(wkt_geometry="POLYGON((0 0,1 0,1 1,0 1,0 0))")
+
+    monkeypatch.setattr(tool, "extract_constraints", lambda *_args, **_kwargs: (temporal, spatial))
+    monkeypatch.setattr(
+        tool,
+        "search_all_entity_types",
+        lambda *_args, **_kwargs: [
+            {"type": "collection", "similarity": 0.8, "match_type": "direct"}
+        ],
+    )
+
+    # Return collections from hydration
+    collections_dict = [
+        _make_collection_dict("C1", metadata={"TemporalExtents": []}),
+        _make_collection_dict("C2", metadata={"TemporalExtents": []}),
+    ]
+    collections_match = [
+        _make_collection("C1"),
+        _make_collection("C2"),
+    ]
+    monkeypatch.setattr(
+        tool, "score_and_rank_collections", lambda *_args, **_kwargs: collections_dict
+    )
+    monkeypatch.setattr(tool, "hydrate_collections", lambda *_args, **_kwargs: collections_match)
+    monkeypatch.setattr(tool, "_describe_search_strategy", lambda *a, **k: "desc")
+    monkeypatch.setattr(tool, "should_expand_query", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tool, "check_disambiguation", lambda cols: (False, []))
+    monkeypatch.setattr(tool, "filter_by_user_refinements", lambda cols, refs: cols)
+
+    monkeypatch.setattr(tool, "validate_granule_availability", lambda *args: [])
+
+    query = DiscoverDataInput(query="ocean data")
+    output = tool.discover_data(query)
+
+    assert output["status"] == "no_granules_in_constraints"
+    assert not output["collections"]
