@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from models.cmr import KMSTerm
 from util.embeddings import (
     BedrockEmbeddingGenerator,
     KMSEnrichedEmbeddingGenerator,
@@ -11,7 +12,6 @@ from util.embeddings import (
     get_embedding_generator,
 )
 from util.kms import clear_cache as kms_clear_cache
-from util.models import KMSTerm
 
 
 class TestKMSEnrichedEmbeddingGenerator:

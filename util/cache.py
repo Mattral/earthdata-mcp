@@ -117,6 +117,18 @@ class CacheClient(ABC):
         """
 
     @abstractmethod
+    def delete(self, key: str) -> bool:
+        """
+        Delete a key from cache.
+
+        Args:
+            key: Cache key to delete
+
+        Returns:
+            True if deleted, False otherwise
+        """
+
+    @abstractmethod
     def hexists(self, key: str) -> bool:
         """
         Check if a hash key exists in cache.
@@ -334,6 +346,17 @@ class RedisCache(CacheClient):
 
         except (RedisError, TypeError, ValueError) as e:
             logger.warning("Hash write error for key '%s': %s", key, e)
+            return False
+
+    def delete(self, key: str) -> bool:
+        """Delete a key from Redis."""
+        if not self.is_available():
+            return False
+
+        try:
+            return self.client.delete(key) > 0
+        except RedisError as e:
+            logger.warning("Delete error for key '%s': %s", key, e)
             return False
 
     def hexists(self, key: str) -> bool:

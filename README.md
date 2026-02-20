@@ -10,17 +10,21 @@ earthdata-mcp/
 │   └── <toolname>/
 │       ├── tool.py           # Tool implementation
 │       ├── manifest.json     # MCP tool metadata
-│       ├── input_model.py    # Pydantic input model
-│       └── output_model.py   # Pydantic output model
+│       └── utils/            # Tool-specific helpers
+├── models/                   # Centralized data models
+│   ├── cmr.py                # CMR pipeline models
+│   └── tools/                # Tool-specific I/O models
+│       └── discover_data.py
 ├── lambdas/                  # AWS Lambda handlers
 │   ├── ingest/               # SNS to SQS message processing
-│   ├── embedding/            # Embedding generation
+│   ├── embedding/            # Queue consumer, starts enrichment
+│   ├── enrichment/           # Step Function pipeline (validate, fix, embed, store)
 │   └── bootstrap/            # Initial data load
 ├── util/                     # Shared utilities
 ├── middleware/               # Server middleware (CORS)
 ├── terraform/                # Infrastructure as code
 │   ├── database/             # RDS PostgreSQL stack
-│   └── application/          # Lambdas, ECS, SQS stack
+│   └── application/          # Lambdas, ECS, SQS, Step Functions stack
 ├── server.py                 # MCP server entry point
 ├── loader.py                 # Tool discovery and registration
 └── pyproject.toml            # Dependencies
@@ -151,16 +155,12 @@ uv run pytest tests/test_server.py
 The application deploys to AWS via Bamboo CI/CD:
 
 - **MCP Server**: ECS Fargate behind ALB at `/mcp`
-- **Lambdas**: Ingest (SNS to SQS), Embedding (Bedrock), Bootstrap
+- **Lambdas**: Ingest (SNS to SQS), Embedding (queue consumer), Bootstrap
+- **Enrichment Pipeline**: Step Function that validates, fixes, embeds, and stores metadata
 - **Database**: RDS PostgreSQL with pgvector
+- **Redis**: ElastiCache for caching and payload offloading
 
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `ENVIRONMENT_NAME` | Deployment environment (sit, uat, prod) |
-| `CMR_URL` | CMR API base URL |
-| `EMBEDDING_MODEL` | Bedrock model ID |
+See [`terraform/`](terraform/) for infrastructure details and environment variable configuration.
 
 ## Connecting Clients
 

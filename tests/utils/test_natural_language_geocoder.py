@@ -8,7 +8,7 @@ from shapely.geometry import LinearRing, LineString, MultiPolygon, Point, Polygo
 from util.natural_language_geocoder import _normalize_geometry_to_wkt, convert_text_to_geom
 
 
-class TestNormalizeGeometryToWkt:
+class TestNormalizeGeometryToWkt:  # pylint: disable=too-many-public-methods
     """Tests for _normalize_geometry_to_wkt function."""
 
     def test_converts_simple_polygon_to_wkt(self):
@@ -104,11 +104,14 @@ class TestNormalizeGeometryToWkt:
         mock_geom.is_empty = False
         mock_geom.is_valid = False
 
-        with patch(
-            "util.natural_language_geocoder.make_valid", side_effect=Exception("make_valid failed")
+        with (
+            patch(
+                "util.natural_language_geocoder.make_valid",
+                side_effect=Exception("make_valid failed"),
+            ),
+            pytest.raises(ValueError, match="Invalid geometry"),
         ):
-            with pytest.raises(ValueError, match="Invalid geometry"):
-                _normalize_geometry_to_wkt(mock_geom)
+            _normalize_geometry_to_wkt(mock_geom)
 
     def test_valid_geometry_skips_make_valid(self):
         """Test that make_valid() is never called when geometry is already valid."""
@@ -158,9 +161,9 @@ class TestNormalizeGeometryToWkt:
         # make_valid() on a bow-tie typically produces a MultiPolygon
         if repaired.geom_type == "MultiPolygon":
             for part in repaired.geoms:
-                assert LinearRing(
-                    part.exterior.coords
-                ).is_ccw, f"Exterior ring of repaired part is not CCW: {part}"
+                assert LinearRing(part.exterior.coords).is_ccw, (
+                    f"Exterior ring of repaired part is not CCW: {part}"
+                )
         else:
             assert LinearRing(repaired.exterior.coords).is_ccw
 
@@ -178,11 +181,11 @@ class TestNormalizeGeometryToWkt:
         from shapely import wkt as shapely_wkt
 
         oriented = shapely_wkt.loads(result)
-        assert oriented.geom_type == "MULTIPOLYGON" or oriented.geom_type == "MultiPolygon"
+        assert oriented.geom_type in ("MULTIPOLYGON", "MultiPolygon")
         for part in oriented.geoms:
-            assert LinearRing(
-                part.exterior.coords
-            ).is_ccw, f"Exterior ring of MultiPolygon part is not CCW: {part}"
+            assert LinearRing(part.exterior.coords).is_ccw, (
+                f"Exterior ring of MultiPolygon part is not CCW: {part}"
+            )
 
     def test_preserves_ccw_multipolygon_orientation(self):
         """Test that a MultiPolygon already counter-clockwise stays counter-clockwise after normalization."""
@@ -255,22 +258,22 @@ class TestNormalizeGeometryToWkt:
 
         oriented = shapely_wkt.loads(result)
         for part in oriented.geoms:
-            assert LinearRing(
-                part.exterior.coords
-            ).is_ccw, f"Exterior ring of part is not CCW: {part}"
+            assert LinearRing(part.exterior.coords).is_ccw, (
+                f"Exterior ring of part is not CCW: {part}"
+            )
             for interior in part.interiors:
-                assert not LinearRing(
-                    interior.coords
-                ).is_ccw, f"Interior ring (hole) of part is not CW: {interior}"
+                assert not LinearRing(interior.coords).is_ccw, (
+                    f"Interior ring (hole) of part is not CW: {interior}"
+                )
 
-    """Tests for convert_text_to_geom function."""
+    # Tests for convert_text_to_geom function.
 
     @patch("util.natural_language_geocoder.extract_geometry_from_text")
     @patch("util.natural_language_geocoder.simplify_geometry")
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_successful_geocoding_returns_wkt(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract
     ):
         """Test successful geocoding flow returns WKT string."""
         # Setup mocks
@@ -291,7 +294,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_returns_none_on_validation_error(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract
     ):
         """Test that ValidationError from normalization results in None return."""
         polygon = Polygon([(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])
@@ -312,7 +315,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.extract_geometry_from_text")
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
-    def test_returns_none_on_unexpected_exception(self, mock_lookup, mock_llm, mock_extract):
+    def test_returns_none_on_unexpected_exception(self, _mock_lookup, _mock_llm, mock_extract):
         """Test that unexpected exceptions are caught and None is returned."""
         mock_extract.side_effect = RuntimeError("Unexpected error")
 
@@ -325,7 +328,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_logs_geometry_details(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract, caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, caplog
     ):
         """Test that geometry details are logged for debugging."""
         polygon = Polygon([(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])
@@ -343,7 +346,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_logs_point_geometry_details(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract, caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, caplog
     ):
         """Test that Point geometry details are logged correctly."""
         point = Point(10.5, 20.3)
@@ -361,7 +364,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_handles_geometry_logging_exception(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract, caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, _caplog
     ):
         """Test that exceptions during geometry logging don't break the flow."""
         # Mock geometry that raises exception when accessing geom_type
@@ -381,7 +384,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_logs_linestring_geometry_details(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract, caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, caplog
     ):
         """Test that LineString geometry details are logged correctly."""
         linestring = LineString([(0, 0), (1, 1), (2, 2)])
@@ -399,7 +402,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_logs_linearring_geometry_details(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract, caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, caplog
     ):
         """Test that LinearRing geometry details are logged correctly."""
         linearring = LinearRing([(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])
@@ -417,7 +420,7 @@ class TestNormalizeGeometryToWkt:
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_logs_multipolygon_geometry_details(
-        self, mock_lookup, mock_llm, mock_simplify, mock_extract, caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, caplog
     ):
         """Test that MultiPolygon geometry details are logged correctly."""
         poly1 = Polygon([(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])

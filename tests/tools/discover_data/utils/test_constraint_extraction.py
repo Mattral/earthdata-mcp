@@ -2,8 +2,8 @@
 
 from datetime import UTC, datetime
 
+from models.tools.discover_data import SpatialConstraint, TemporalConstraint
 from tools.discover_data.utils import constraint_extraction
-from tools.models.constraints import SpatialConstraint, TemporalConstraint
 
 
 def test_extract_constraints_extracts_both_when_no_explicit(monkeypatch):

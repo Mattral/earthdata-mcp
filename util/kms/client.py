@@ -6,12 +6,13 @@ concurrent pattern-match requests that can overwhelm the gateway.
 """
 
 import logging
+import time
 from urllib.parse import quote
 
 import requests
 
+from models.cmr import KMSTerm
 from util.cache import get_cache_client
-from util.models import KMSTerm
 
 logger = logging.getLogger(__name__)
 
@@ -24,20 +25,11 @@ def _get_scheme_cache_key(scheme: str) -> str:
     return f"kms:scheme:{scheme}"
 
 
-def _fetch_scheme(scheme: str) -> dict[str, dict]:
-    """
-    Fetch all concepts in a scheme from the KMS API.
+_KMS_PAGE_SIZE = 2000
 
-    Returns:
-        Dict mapping uppercase term to {uuid, term, definition}
-    """
-    encoded_scheme = quote(scheme, safe="")
-    url = f"{KMS_BASE_URL}/concepts/concept_scheme/{encoded_scheme}"
 
-    response = requests.get(url, params={"format": "json"}, timeout=60)
-    response.raise_for_status()
-    data = response.json()
-
+def _parse_concepts(data: dict) -> dict[str, dict]:
+    """Extract terms from a KMS API response page."""
     terms = {}
     for concept in data.get("concepts", []):
         pref_label = concept.get("prefLabel")
@@ -46,26 +38,79 @@ def _fetch_scheme(scheme: str) -> dict[str, dict]:
         if not pref_label or not uuid:
             continue
 
-        # Extract definition if available
         definition = None
         definitions = concept.get("definitions", [])
         if definitions and isinstance(definitions, list):
             definition = definitions[0].get("text")
 
-        # Store with uppercase key for case-insensitive lookup
+        # Uppercase key for case-insensitive lookup
         terms[pref_label.upper()] = {
             "uuid": uuid,
             "term": pref_label,
             "definition": definition,
         }
 
-    logger.info("Fetched %d terms from KMS scheme '%s'", len(terms), scheme)
     return terms
+
+
+def _fetch_scheme(scheme: str) -> dict[str, dict]:
+    """
+    Fetch all concepts in a scheme from the KMS API.
+
+    Paginates through all pages — the API returns at most 2,000 terms
+    per page and the sciencekeywords scheme has 3,600+.
+
+    Returns:
+        Dict mapping uppercase term to {uuid, term, definition}
+    """
+    encoded_scheme = quote(scheme, safe="")
+    url = f"{KMS_BASE_URL}/concepts/concept_scheme/{encoded_scheme}"
+
+    # First page
+    response = requests.get(
+        url,
+        params={"format": "json", "page_size": _KMS_PAGE_SIZE},
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    terms = _parse_concepts(data)
+    total_hits = data.get("hits", len(terms))
+
+    # Fetch remaining pages
+    page = 2
+    while len(terms) < total_hits:
+        response = requests.get(
+            url,
+            params={"format": "json", "page_size": _KMS_PAGE_SIZE, "page_num": page},
+            timeout=60,
+        )
+        response.raise_for_status()
+        page_data = response.json()
+
+        new_terms = _parse_concepts(page_data)
+        if not new_terms:
+            break
+
+        terms.update(new_terms)
+        page += 1
+
+    logger.info("Fetched %d terms from KMS scheme '%s' (%d pages)", len(terms), scheme, page - 1)
+    return terms
+
+
+_FETCH_MAX_RETRIES = 3
+_FETCH_RETRY_DELAY = 2  # seconds
 
 
 def _ensure_scheme_cached(scheme: str) -> dict[str, dict] | None:
     """
     Ensure a KMS scheme is cached in Redis, or fetch it.
+
+    On fetch failure, retries up to ``_FETCH_MAX_RETRIES`` times with a short
+    delay.  Before each retry, re-checks the cache — another Lambda may have
+    succeeded in the meantime.
 
     Returns:
         {} (empty dict) if scheme is already cached
@@ -79,22 +124,40 @@ def _ensure_scheme_cached(scheme: str) -> dict[str, dict] | None:
     if cache.hexists(cache_key):
         return {}
 
-    # Fetch the entire scheme
-    try:
-        terms = _fetch_scheme(scheme)
-    except (requests.RequestException, ValueError) as e:
-        logger.warning("Failed to fetch KMS scheme '%s': %s", scheme, e)
-        return None
+    # Fetch the entire scheme, retrying on transient failures
+    terms = None
+    for attempt in range(_FETCH_MAX_RETRIES):
+        try:
+            terms = _fetch_scheme(scheme)
+        except (requests.RequestException, ValueError) as e:
+            logger.warning(
+                "Failed to fetch KMS scheme '%s' (attempt %d/%d): %s",
+                scheme,
+                attempt + 1,
+                _FETCH_MAX_RETRIES,
+                e,
+            )
+            time.sleep(_FETCH_RETRY_DELAY)
+            # Another Lambda may have populated the cache while we waited
+            if cache.hexists(cache_key):
+                logger.info("KMS scheme '%s' now in cache (populated by another Lambda)", scheme)
+                return {}
+            continue
 
-    if not terms:
-        logger.warning("KMS scheme '%s' returned no terms", scheme)
-        return None
+        # Fetch succeeded — stop retrying
+        if not terms:
+            logger.warning("KMS scheme '%s' returned no terms", scheme)
+            return None
 
-    # Attempt to cache - but return terms regardless of cache success
-    if not cache.hmset(cache_key, terms, ttl=KMS_CACHE_TTL):
-        logger.warning("Failed to cache KMS scheme '%s', serving from fetch", scheme)
+        # Attempt to cache — return terms regardless of cache success
+        if not cache.hmset(cache_key, terms, ttl=KMS_CACHE_TTL):
+            logger.warning("Failed to cache KMS scheme '%s', serving from fetch", scheme)
 
-    return terms
+        return terms
+
+    # All retries exhausted
+    logger.error("All %d attempts to fetch KMS scheme '%s' failed", _FETCH_MAX_RETRIES, scheme)
+    return None
 
 
 def lookup_term(term: str, scheme: str) -> KMSTerm | None:
@@ -175,10 +238,15 @@ def lookup_terms(terms: list[tuple[str, str]]) -> dict[tuple[str, str], KMSTerm 
     return results
 
 
-def clear_cache() -> None:
-    """
-    Clear the KMS lookup cache. Useful for testing.
+_KMS_SCHEMES = ("sciencekeywords", "platforms", "instruments")
 
-    Note: This is a no-op since Redis entries expire via TTL. The function
-    exists to maintain a consistent API if a different caching strategy is used.
-    """
+
+def clear_cache() -> None:
+    """Delete all cached KMS scheme hashes so the next lookup re-fetches from the API."""
+    cache = get_cache_client()
+    for scheme in _KMS_SCHEMES:
+        key = _get_scheme_cache_key(scheme)
+        if cache.delete(key):
+            logger.info("Cleared KMS cache for scheme '%s'", scheme)
+        else:
+            logger.debug("No cache entry to clear for scheme '%s'", scheme)

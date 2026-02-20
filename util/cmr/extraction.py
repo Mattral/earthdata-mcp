@@ -7,8 +7,8 @@ for collections, variables, and citations.
 
 from typing import Any
 
+from models.cmr import ConceptMessage, EmbeddingChunk, ExtractionResult, KMSTerm
 from util.cmr.client import CMRError
-from util.models import ConceptMessage, EmbeddingChunk, ExtractionResult, KMSTerm
 
 # Field mappings: UMM field names -> attribute names for each concept type
 COLLECTION_FIELDS = {"EntryTitle": "title", "Abstract": "abstract"}

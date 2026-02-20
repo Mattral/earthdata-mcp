@@ -1,7 +1,5 @@
 """Tests for util.environment."""
 
-import pytest
-
 from util.environment import get_client_id, get_environment
 
 

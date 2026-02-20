@@ -25,7 +25,7 @@ class TestMessageValidation:
         return {"Sns": {"MessageId": "test-msg", "Message": json.dumps(message)}}
 
     def test_valid_update_message_passes(self, mocker):
-        """Test that valid update messages pass validation."""
+        """Test that valid update messages pass validation and route to SQS."""
         mock_sqs = mocker.MagicMock()
         mocker.patch("util.sqs._client", mock_sqs)
         mock_sqs.send_message.return_value = {"MessageId": "sqs-123"}
@@ -39,9 +39,10 @@ class TestMessageValidation:
             }
         )
 
-        # Should not raise
         result = process_record(record)
         assert result["status"] == "queued"
+        assert "sqs_message_id" in result
+        mock_sqs.send_message.assert_called_once()
 
     def test_valid_delete_message_passes(self, mocker):
         """Test that valid delete messages pass validation."""
@@ -58,7 +59,6 @@ class TestMessageValidation:
             }
         )
 
-        # Should not raise
         result = process_record(record)
         assert result["status"] == "queued"
 
@@ -133,7 +133,7 @@ class TestHandler:
     """Tests for the main handler function."""
 
     def test_handler_processes_valid_sns_event(self, mocker):
-        """Test handler processes valid SNS event and sends to SQS."""
+        """Test handler processes valid SNS event and routes to SQS."""
         mock_sqs = mocker.MagicMock()
         mocker.patch("util.sqs._client", mock_sqs)
         mock_sqs.send_message.return_value = {"MessageId": "sqs-msg-123"}
@@ -299,3 +299,5 @@ class TestHandler:
 
         assert result["processed"] == 2
         assert result["failed"] == 1
+        # Both update and delete go to SQS
+        assert mock_sqs.send_message.call_count == 2

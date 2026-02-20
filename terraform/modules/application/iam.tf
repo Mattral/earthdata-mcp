@@ -147,6 +147,14 @@ resource "aws_iam_role_policy" "embedding_lambda" {
         Resource = "arn:aws:kms:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:alias/aws/ssm"
       },
       {
+        Sid    = "StepFunctions"
+        Effect = "Allow"
+        Action = [
+          "states:StartExecution"
+        ]
+        Resource = aws_sfn_state_machine.enrichment.arn
+      },
+      {
         Sid    = "VPCNetworkInterfaces"
         Effect = "Allow"
         Action = [
@@ -184,7 +192,7 @@ resource "aws_security_group_rule" "embedding_https_egress" {
   description       = "HTTPS outbound (CMR, Bedrock, Secrets Manager)"
 }
 
-# Allow embedding lambda to connect to database
+# Allow embedding lambda to connect to database (direct)
 resource "aws_security_group_rule" "embedding_to_database" {
   type                     = "egress"
   from_port                = 5432
@@ -193,6 +201,17 @@ resource "aws_security_group_rule" "embedding_to_database" {
   source_security_group_id = var.database_security_group_id
   security_group_id        = aws_security_group.embedding_lambda.id
   description              = "PostgreSQL to embeddings database"
+}
+
+# Allow embedding lambda to connect to RDS Proxy
+resource "aws_security_group_rule" "embedding_to_proxy" {
+  type                     = "egress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = var.database_proxy_security_group_id
+  security_group_id        = aws_security_group.embedding_lambda.id
+  description              = "PostgreSQL to RDS Proxy"
 }
 
 # Allow embedding lambda to connect to Redis

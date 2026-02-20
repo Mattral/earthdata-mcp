@@ -92,22 +92,14 @@ class TestExtractSpatialResolution:
 
     def test_prefers_gridded_over_non_gridded(self):
         """Test that GriddedResolutions is preferred."""
-        metadata = {
-            "SpatialExtent": {
-                "HorizontalSpatialDomain": {
-                    "ResolutionAndCoordinateSystem": {
-                        "HorizontalDataResolution": {
-                            "GriddedResolutions": [
-                                {"XDimension": 1, "YDimension": 1, "Unit": "Kilometers"}
-                            ],
-                            "NonGriddedResolutions": [
-                                {"XDimension": 500, "YDimension": 500, "Unit": "Meters"}
-                            ],
-                        }
-                    }
-                }
-            }
-        }
+        metadata = generate_spatial_resolution_metadata(1, 1, "Kilometers")
+        # Add a competing NonGriddedResolutions entry
+        horiz_res = metadata["SpatialExtent"]["HorizontalSpatialDomain"][
+            "ResolutionAndCoordinateSystem"
+        ]["HorizontalDataResolution"]
+        horiz_res["NonGriddedResolutions"] = [
+            {"XDimension": 500, "YDimension": 500, "Unit": "Meters"}
+        ]
 
         result = extract_spatial_resolution(metadata)
 

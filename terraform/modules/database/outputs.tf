@@ -38,6 +38,16 @@ output "secret_name" {
   value       = aws_secretsmanager_secret.database.name
 }
 
+output "proxy_endpoint" {
+  description = "RDS Proxy endpoint hostname"
+  value       = aws_db_proxy.main.endpoint
+}
+
+output "proxy_security_group_id" {
+  description = "Security group ID for the RDS Proxy"
+  value       = aws_security_group.rds_proxy.id
+}
+
 output "migration_lambda_arn" {
   description = "ARN of the migration Lambda function"
   value       = aws_lambda_function.migration.arn

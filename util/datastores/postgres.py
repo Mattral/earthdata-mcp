@@ -8,9 +8,9 @@ import os
 import uuid
 from typing import Any
 
+from models.cmr import CollectionData, ConceptType
 from util.database import get_db_connection
 from util.datastores.base import EmbeddingDatastore
-from util.models import CollectionData, ConceptType
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,14 @@ ASSOCIATION_TYPE_MAP = {
     "citations": "citation",
 }
 
+# KMS scheme types used to filter associations
+KMS_TYPES = ("instruments", "platforms", "sciencekeywords")
+
+
+def _type_str(entity_type: ConceptType | str) -> str:
+    """Resolve a ConceptType enum or string to its string value."""
+    return entity_type.value if hasattr(entity_type, "value") else entity_type
+
 
 class PostgresEmbeddingDatastore(EmbeddingDatastore):
     """PostgreSQL + pgvector implementation of EmbeddingDatastore."""
@@ -34,46 +42,101 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
     def __init__(self):
         self.conn = get_db_connection()
 
+    def get_chunks_for_entity(
+        self,
+        external_id: str,
+        entity_type: ConceptType | str,
+    ) -> dict[str, tuple[str, list[float]]]:
+        """Get existing embedding chunks for an entity.
+
+        Returns a dict mapping attribute name to (text_content, embedding_vector)
+        for each stored chunk belonging to this entity.
+        """
+        type_str = _type_str(entity_type)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT attribute, text_content, embedding
+                FROM {EMBEDDINGS_TABLE}
+                WHERE external_id = %s AND type = %s
+                """,
+                (external_id, type_str),
+            )
+            return {
+                row[0]: (row[1], list(row[2]) if row[2] is not None else [])
+                for row in cur.fetchall()
+            }
+
     def upsert_chunks(
         self,
         entity_type: ConceptType | str,
         external_id: str,
         chunks: list[tuple[str, str, list[float]]],
     ) -> int:
-        """Insert or update embedding chunks for an entity."""
-        if not chunks:
-            return 0
-
-        type_str = entity_type.value if hasattr(entity_type, "value") else entity_type
+        """Diff-based upsert: insert new, update changed, delete removed, skip unchanged."""
+        type_str = _type_str(entity_type)
+        new_attrs = {attr for attr, _, _ in chunks}
 
         with self.conn.transaction(), self.conn.cursor() as cur:
-            # Delete existing chunks for this entity
             cur.execute(
-                f"DELETE FROM {EMBEDDINGS_TABLE} WHERE external_id = %s AND type = %s",
+                f"""
+                SELECT attribute, text_content
+                FROM {EMBEDDINGS_TABLE}
+                WHERE external_id = %s AND type = %s
+                """,
                 (external_id, type_str),
             )
+            existing = {row[0]: row[1] for row in cur.fetchall()}
 
-            # Insert new chunks
-            for attribute, text_content, embedding in chunks:
+            # Remove attributes no longer present in the extraction
+            stale = set(existing) - new_attrs
+            if stale:
                 cur.execute(
                     f"""
-                        INSERT INTO {EMBEDDINGS_TABLE}
-                            (id, type, external_id, attribute, text_content, embedding)
-                        VALUES
-                            (%s, %s, %s, %s, %s, %s)
-                        """,
-                    (
-                        str(uuid.uuid4()),
-                        type_str,
-                        external_id,
-                        attribute,
-                        text_content,
-                        embedding,
-                    ),
+                    DELETE FROM {EMBEDDINGS_TABLE}
+                    WHERE external_id = %s AND type = %s AND attribute = ANY(%s)
+                    """,
+                    (external_id, type_str, list(stale)),
                 )
 
-        logger.info("Upserted %d chunks for %s:%s", len(chunks), type_str, external_id)
-        return len(chunks)
+            count = 0
+            for attribute, text_content, embedding in chunks:
+                # Skip unchanged — text matches what's already stored
+                if attribute in existing and existing[attribute] == text_content:
+                    count += 1
+                    continue
+
+                if attribute in existing:
+                    # Text changed — update embedding in place
+                    cur.execute(
+                        f"""
+                        UPDATE {EMBEDDINGS_TABLE}
+                        SET text_content = %s, embedding = %s, updated_at = NOW()
+                        WHERE external_id = %s AND type = %s AND attribute = %s
+                        """,
+                        (text_content, embedding, external_id, type_str, attribute),
+                    )
+                else:
+                    # New attribute — insert
+                    cur.execute(
+                        f"""
+                        INSERT INTO {EMBEDDINGS_TABLE}
+                            (id, type, external_id, attribute, text_content, embedding)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            type_str,
+                            external_id,
+                            attribute,
+                            text_content,
+                            embedding,
+                        ),
+                    )
+                count += 1
+
+        logger.info("Upserted %d chunks for %s:%s", count, type_str, external_id)
+        return count
 
     def delete_chunks(self, external_id: str) -> int:
         """Delete all embedding chunks for an entity."""
@@ -90,33 +153,51 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
         left_id: str,
         associations: dict[str, list[str]],
     ) -> int:
-        """Store associations between entities."""
-        if not associations:
-            return 0
+        """Diff-based upsert for concept associations (variables, citations)."""
+        left_type_str = _type_str(left_type)
+        concept_types = tuple(ASSOCIATION_TYPE_MAP.values())
 
-        count = 0
-        left_type_str = left_type.value if hasattr(left_type, "value") else left_type
+        # Build desired set of (right_type, right_id) from the input
+        desired: set[tuple[str, str]] = set()
+        for assoc_key, right_type in ASSOCIATION_TYPE_MAP.items():
+            for right_id in associations.get(assoc_key, []):
+                desired.add((right_type, right_id))
 
         with self.conn.transaction(), self.conn.cursor() as cur:
-            # Delete existing concept associations (not KMS) for this entity
+            placeholders = ",".join(["%s"] * len(concept_types))
             cur.execute(
-                f"DELETE FROM {ASSOCIATIONS_TABLE} WHERE left_id = %s AND right_type IN ('variable', 'citation')",
-                (left_id,),
+                f"""
+                SELECT right_type, right_id
+                FROM {ASSOCIATIONS_TABLE}
+                WHERE left_id = %s AND right_type IN ({placeholders})
+                """,
+                (left_id, *concept_types),
             )
+            existing = {(row[0], row[1]) for row in cur.fetchall()}
 
-            for assoc_key, right_type in ASSOCIATION_TYPE_MAP.items():
-                ids = associations.get(assoc_key, [])
-                for right_id in ids:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {ASSOCIATIONS_TABLE}
-                            (left_type, left_id, right_type, right_id)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (left_id, right_id) DO NOTHING
-                        """,
-                        (left_type_str, left_id, right_type, right_id),
-                    )
-                    count += cur.rowcount
+            # Remove associations no longer in the desired set
+            for right_type, right_id in existing - desired:
+                cur.execute(
+                    f"""
+                    DELETE FROM {ASSOCIATIONS_TABLE}
+                    WHERE left_id = %s AND right_id = %s AND right_type = %s
+                    """,
+                    (left_id, right_id, right_type),
+                )
+
+            # Insert associations that don't already exist
+            count = 0
+            for right_type, right_id in desired - existing:
+                cur.execute(
+                    f"""
+                    INSERT INTO {ASSOCIATIONS_TABLE}
+                        (left_type, left_id, right_type, right_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (left_id, right_id) DO NOTHING
+                    """,
+                    (left_type_str, left_id, right_type, right_id),
+                )
+                count += cur.rowcount
 
         return count
 
@@ -141,7 +222,7 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
         """Search for similar embeddings using pgvector."""
         with self.conn.cursor() as cur:
             if entity_type:
-                type_str = entity_type.value if hasattr(entity_type, "value") else entity_type
+                type_str = _type_str(entity_type)
                 cur.execute(
                     f"""
                     SELECT type, external_id, attribute, text_content,
@@ -181,14 +262,15 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
 
     def get_kms_embedding(self, kms_uuid: str) -> dict[str, Any] | None:
         """Get a KMS embedding by UUID."""
+        placeholders = ",".join(["%s"] * len(KMS_TYPES))
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT type, external_id, attribute, text_content, embedding
                 FROM {EMBEDDINGS_TABLE}
-                WHERE external_id = %s AND type IN ('instruments', 'platforms', 'sciencekeywords')
+                WHERE external_id = %s AND type IN ({placeholders})
                 """,
-                (kms_uuid,),
+                (kms_uuid, *KMS_TYPES),
             )
             row = cur.fetchone()
             if row:
@@ -235,50 +317,62 @@ class PostgresEmbeddingDatastore(EmbeddingDatastore):
         self,
         left_type: ConceptType | str,
         left_id: str,
-        kms_refs: list[tuple[str, str]],  # List of (kms_uuid, scheme)
+        kms_refs: list[tuple[str, str]],  # (kms_uuid, scheme) pairs
     ) -> int:
-        """Link an entity to KMS terms."""
-        if not kms_refs:
-            return 0
-
-        count = 0
-        left_type_str = left_type.value if hasattr(left_type, "value") else left_type
+        """Diff-based upsert for KMS term associations."""
+        left_type_str = _type_str(left_type)
+        desired = set(kms_refs)
+        placeholders = ",".join(["%s"] * len(KMS_TYPES))
 
         with self.conn.transaction(), self.conn.cursor() as cur:
-            # Delete existing KMS associations for this entity
+            # Fetch existing KMS associations as (kms_uuid, scheme) pairs
             cur.execute(
                 f"""
-                    DELETE FROM {ASSOCIATIONS_TABLE}
-                    WHERE left_id = %s AND right_type IN ('instruments', 'platforms', 'sciencekeywords')
-                    """,
-                (left_id,),
+                SELECT right_id, right_type
+                FROM {ASSOCIATIONS_TABLE}
+                WHERE left_id = %s AND right_type IN ({placeholders})
+                """,
+                (left_id, *KMS_TYPES),
             )
+            existing = {(row[0], row[1]) for row in cur.fetchall()}
 
-            # Insert new associations
-            for kms_uuid, scheme in kms_refs:
+            # Remove associations for KMS terms no longer in the extraction
+            for kms_uuid, scheme in existing - desired:
                 cur.execute(
                     f"""
-                        INSERT INTO {ASSOCIATIONS_TABLE}
-                            (left_type, left_id, right_type, right_id)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (left_id, right_id) DO NOTHING
-                        """,
+                    DELETE FROM {ASSOCIATIONS_TABLE}
+                    WHERE left_id = %s AND right_id = %s AND right_type = %s
+                    """,
+                    (left_id, kms_uuid, scheme),
+                )
+
+            # Insert associations that don't already exist
+            count = 0
+            for kms_uuid, scheme in desired - existing:
+                cur.execute(
+                    f"""
+                    INSERT INTO {ASSOCIATIONS_TABLE}
+                        (left_type, left_id, right_type, right_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (left_id, right_id) DO NOTHING
+                    """,
                     (left_type_str, left_id, scheme, kms_uuid),
                 )
                 count += cur.rowcount
 
-        logger.info("Created %d KMS associations for %s:%s", count, left_type_str, left_id)
+        logger.info("Created %d new KMS associations for %s:%s", count, left_type_str, left_id)
         return count
 
     def delete_kms_associations(self, external_id: str) -> int:
         """Delete all KMS associations for an entity."""
+        placeholders = ",".join(["%s"] * len(KMS_TYPES))
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""
-                    DELETE FROM {ASSOCIATIONS_TABLE}
-                    WHERE left_id = %s AND right_type IN ('instruments', 'platforms', 'sciencekeywords')
-                    """,
-                (external_id,),
+                DELETE FROM {ASSOCIATIONS_TABLE}
+                WHERE left_id = %s AND right_type IN ({placeholders})
+                """,
+                (external_id, *KMS_TYPES),
             )
             return cur.rowcount
 

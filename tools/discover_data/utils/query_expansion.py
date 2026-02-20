@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from tools.models.output_model import ClarifyingQuestion
+from models.tools.discover_data import ClarifyingQuestion
 
 logger = logging.getLogger(__name__)
 

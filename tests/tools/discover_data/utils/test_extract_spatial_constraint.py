@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.discover_data.models.extraction import ParsedSpatialExtraction
+from models.tools.discover_data import ParsedSpatialExtraction
 from tools.discover_data.utils import extract_spatial_constraint
 
 

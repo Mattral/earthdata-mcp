@@ -10,9 +10,8 @@ from datetime import UTC, datetime
 import instructor
 from langfuse import observe
 
-from tools.discover_data.models.extraction import ParsedTemporalExtraction
+from models.tools.discover_data import ParsedTemporalExtraction, TemporalConstraint
 from tools.discover_data.utils.llm_extraction import MODEL_ID, PROVIDER, load_extraction_prompt
-from tools.models.constraints import TemporalConstraint
 from util.langfuse import trace_update
 
 logger = logging.getLogger(__name__)

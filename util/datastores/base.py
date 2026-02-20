@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from util.models import CollectionData, ConceptType
+from models.cmr import CollectionData, ConceptType
 
 
 class EmbeddingDatastore(ABC):
@@ -12,6 +12,23 @@ class EmbeddingDatastore(ABC):
 
     Implementations can use PostgreSQL, DynamoDB, Parquet, or any other storage backend.
     """
+
+    @abstractmethod
+    def get_chunks_for_entity(
+        self,
+        external_id: str,
+        entity_type: ConceptType | str,
+    ) -> dict[str, tuple[str, list[float]]]:
+        """
+        Get existing embedding chunks for an entity.
+
+        Args:
+            external_id: External identifier (concept ID or KMS UUID).
+            entity_type: Type of entity (collection, variable, citation, etc.).
+
+        Returns:
+            Dict mapping attribute to (text_content, embedding) tuples.
+        """
 
     @abstractmethod
     def upsert_chunks(

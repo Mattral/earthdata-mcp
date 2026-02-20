@@ -1,17 +1,17 @@
 """Tests for discover_data orchestrator tool."""
 
 import importlib
-import sys
 from datetime import datetime
-from types import ModuleType
 from unittest.mock import MagicMock
 
-from tools.models.constraints import SpatialConstraint, TemporalConstraint
-from tools.models.input_model import DiscoverDataInput, SearchContext
-from tools.models.output_model import (
+from models.tools.discover_data import (
     ClarifyingQuestion,
     CollectionMatch,
+    DiscoverDataInput,
     ResolutionInfo,
+    SearchContext,
+    SpatialConstraint,
+    TemporalConstraint,
 )
 
 
@@ -60,14 +60,6 @@ def _make_collection_dict(
 
 def _load_tool():
     """Load tool module with stubbed dependencies to avoid import errors."""
-    # Stub util.enrichment before importing tool
-    if "util.enrichment" not in sys.modules:
-        mod = ModuleType("util.enrichment")
-        mod.enrich_metadata = lambda *a, **k: []
-        mod.filter_by_spatial_constraint = lambda cols, *a, **k: cols
-        mod.filter_by_temporal_constraint = lambda cols, *a, **k: cols
-        sys.modules["util.enrichment"] = mod
-
     return importlib.import_module("tools.discover_data.tool")
 
 
@@ -429,8 +421,7 @@ def test_discover_data_granule_validation_error(monkeypatch):
 
     assert output["status"] == "error"
     assert output["error_message"] == (
-        "Granule availability check failed due to a service error. "
-        "Please try your request again."
+        "Granule availability check failed due to a service error. Please try your request again."
     )
     # Internal CMR detail must not be exposed to the caller
     assert "CMR" not in output["error_message"]

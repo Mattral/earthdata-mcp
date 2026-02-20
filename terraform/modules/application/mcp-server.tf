@@ -238,6 +238,10 @@ resource "aws_ecs_task_definition" "mcp" {
           value = var.database_secret_arn
         },
         {
+          name  = "DB_HOST"
+          value = var.database_proxy_endpoint
+        },
+        {
           name  = "CMR_URL"
           value = var.cmr_url
         },

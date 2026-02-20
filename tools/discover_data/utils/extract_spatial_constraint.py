@@ -10,11 +10,8 @@ from datetime import UTC, datetime
 import instructor
 from langfuse import observe
 
-from tools.discover_data.models.extraction import (
-    ParsedSpatialExtraction,
-)
+from models.tools.discover_data import ParsedSpatialExtraction, SpatialConstraint
 from tools.discover_data.utils.llm_extraction import MODEL_ID, PROVIDER, load_extraction_prompt
-from tools.models.constraints import SpatialConstraint
 from util.cache import get_cache_client
 from util.langfuse import trace_update
 from util.natural_language_geocoder import convert_text_to_geom
@@ -202,12 +199,16 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
         logger.warning("Invalid location format for '%s': %s", location_to_geocode, e)
         trace_update(
             tags=["error", "validation_error"],
-            metadata={"error_type": "validation_error"},
+            metadata={
+                "error_type": "validation_error",
+                "error_message": str(e),
+                "location": location_to_geocode,
+            },
         )
         return SpatialConstraint(
             location=location_to_geocode,
             wkt_geometry=None,
-            reasoning=extraction.reasoning,
+            reasoning="Unable to resolve location to a geographic area.",
         )
 
     except Exception as e:
@@ -217,10 +218,12 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
             metadata={
                 "error_type": "exception",
                 "exception_class": type(e).__name__,
+                "error_message": str(e),
+                "location": location_to_geocode,
             },
         )
         return SpatialConstraint(
             location=location_to_geocode,
             wkt_geometry=None,
-            reasoning=extraction.reasoning,
+            reasoning="Spatial search is temporarily unavailable. Please try again.",
         )

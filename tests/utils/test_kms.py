@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from models.cmr import KMSTerm
 from util.kms import clear_cache, lookup_terms
-from util.models import KMSTerm
 
 
 @pytest.fixture
@@ -89,6 +89,7 @@ class TestLookupTerms:
     def test_returns_results_for_multiple_terms(self, mock_cache):
         """Should return results for multiple terms from same scheme."""
         scheme_response = {
+            "hits": 2,
             "concepts": [
                 {
                     "prefLabel": "MODIS",
@@ -100,7 +101,7 @@ class TestLookupTerms:
                     "uuid": "aster-uuid",
                     "definitions": [{"text": "ASTER def"}],
                 },
-            ]
+            ],
         }
 
         with (
@@ -117,20 +118,22 @@ class TestLookupTerms:
             assert len(results) == 2
             assert results[("MODIS", "instruments")].uuid == "modis-uuid"
             assert results[("ASTER", "instruments")].uuid == "aster-uuid"
-            # Only one API call for the whole scheme
+            # Only one API call — all terms fit on one page
             assert mock_get.call_count == 1
 
     def test_handles_multiple_schemes(self, mock_cache):
         """Should handle terms from different schemes."""
         instruments_response = {
+            "hits": 1,
             "concepts": [
                 {"prefLabel": "MODIS", "uuid": "modis-uuid", "definitions": []},
-            ]
+            ],
         }
         platforms_response = {
+            "hits": 1,
             "concepts": [
                 {"prefLabel": "TERRA", "uuid": "terra-uuid", "definitions": []},
-            ]
+            ],
         }
 
         with (
@@ -164,9 +167,10 @@ class TestLookupTerms:
     def test_returns_none_for_not_found_terms(self, mock_cache):
         """Should return None for terms not found."""
         scheme_response = {
+            "hits": 1,
             "concepts": [
                 {"prefLabel": "MODIS", "uuid": "modis-uuid", "definitions": []},
-            ]
+            ],
         }
 
         with (
@@ -217,6 +221,46 @@ class TestLookupTerms:
             assert results[("ASTER", "instruments")].uuid == "cached-aster"
             mock_get.assert_not_called()
 
+    def test_paginates_through_all_pages(self, mock_cache):
+        """Should fetch all pages when scheme has more terms than page size."""
+        page1 = {
+            "hits": 3,
+            "concepts": [
+                {"prefLabel": "ALPHA", "uuid": "alpha-uuid", "definitions": []},
+                {"prefLabel": "BETA", "uuid": "beta-uuid", "definitions": []},
+            ],
+        }
+        page2 = {
+            "hits": 3,
+            "concepts": [
+                {"prefLabel": "GAMMA", "uuid": "gamma-uuid", "definitions": []},
+            ],
+        }
+
+        with (
+            patch("util.kms.client.get_cache_client", return_value=mock_cache),
+            patch("util.kms.client.requests.get") as mock_get,
+            patch("util.kms.client._KMS_PAGE_SIZE", 2),
+        ):
+            responses = [MagicMock(status_code=200), MagicMock(status_code=200)]
+            responses[0].json.return_value = page1
+            responses[0].raise_for_status = MagicMock()
+            responses[1].json.return_value = page2
+            responses[1].raise_for_status = MagicMock()
+            mock_get.side_effect = responses
+
+            results = lookup_terms(
+                [
+                    ("ALPHA", "sciencekeywords"),
+                    ("GAMMA", "sciencekeywords"),
+                ]
+            )
+
+            assert results[("ALPHA", "sciencekeywords")].uuid == "alpha-uuid"
+            assert results[("GAMMA", "sciencekeywords")].uuid == "gamma-uuid"
+            # Two API calls — one per page
+            assert mock_get.call_count == 2
+
     def test_returns_fetched_data_when_caching_fails(self):
         """Should return fetched data even when cache.hmset fails."""
         cache = MagicMock()
@@ -224,13 +268,14 @@ class TestLookupTerms:
         cache.hmset.return_value = False  # Caching fails
 
         scheme_response = {
+            "hits": 1,
             "concepts": [
                 {
                     "prefLabel": "MODIS",
                     "uuid": "fetched-modis",
                     "definitions": [{"text": "MODIS definition"}],
                 },
-            ]
+            ],
         }
 
         with (
