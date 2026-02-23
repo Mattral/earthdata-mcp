@@ -229,6 +229,12 @@ variable "simplify_geom_max_point" {
   default     = "4900"
 }
 
+variable "granule_validation_max_workers" {
+  description = "Max concurrent threads for granule availability checks in the MCP server"
+  type        = string
+  default     = "10"
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

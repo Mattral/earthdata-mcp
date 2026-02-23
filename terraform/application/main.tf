@@ -263,6 +263,9 @@ module "application" {
   # Geometry simplification
   simplify_geom_max_point = var.simplify_geom_max_point
 
+  # Granule validation
+  granule_validation_max_workers = var.granule_validation_max_workers
+
   tags = var.tags
 }
 

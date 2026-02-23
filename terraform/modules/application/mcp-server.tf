@@ -280,6 +280,10 @@ resource "aws_ecs_task_definition" "mcp" {
         {
           name  = "SIMPLIFY_GEOM_MAX_POINT"
           value = var.simplify_geom_max_point
+        },
+        {
+          name  = "GRANULE_VALIDATION_MAX_WORKERS"
+          value = var.granule_validation_max_workers
         }
       ]
 
