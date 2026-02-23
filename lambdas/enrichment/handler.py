@@ -41,6 +41,9 @@ def handler(event, context):
     if not action:
         raise ValueError("Missing 'action' field in event")
 
+    # The action value (e.g. "fetch", "url_fix") maps directly to a module
+    # filename under lambdas/enrichment/. Each step module must be named to
+    # match its action and expose a handle(event, context) function.
     try:
         module = importlib.import_module(f"lambdas.enrichment.{action}")
     except ModuleNotFoundError as e:

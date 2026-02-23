@@ -84,9 +84,9 @@ def extract_urls_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]
     """
     urls = []
 
-    for i, related_url in enumerate(metadata.get("RelatedUrls") or []):
+    for position, related_url in enumerate(metadata.get("RelatedUrls") or []):
         if url := related_url.get("URL"):
-            urls.append({"url": url, "index": i})
+            urls.append({"url": url, "index": position})
 
     return urls
 
@@ -356,7 +356,7 @@ def validate_metadata_urls(
     results = validate_urls(url_info)
 
     # Build summary counts
-    valid_count = sum(1 for r in results if r.is_valid)
+    valid_count = sum(1 for result in results if result.is_valid)
     invalid_count = len(results) - valid_count
 
     # Apply fixes in order: HTTPS upgrades first, then removals
