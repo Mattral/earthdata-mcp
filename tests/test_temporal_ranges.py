@@ -16,7 +16,7 @@ class TestTemporalRangesMocked:
     def mock_instructor_client(self):
         """Fixture to create a mocked instructor client."""
         with patch(
-            "tools.discover_data.utils.extract_temporal_constraint.instructor.from_provider"
+            "tools.discover_data.utils.llm_extraction.instructor.from_provider"
         ) as mock_instructor:
             mock_client = MagicMock()
             mock_instructor.return_value = mock_client
@@ -103,7 +103,7 @@ class TestTemporalRangesMocked:
     def test_client_initialization_error(self):
         """Test error handling when instructor client fails to initialize."""
         with patch(
-            "tools.discover_data.utils.extract_temporal_constraint.instructor.from_provider"
+            "tools.discover_data.utils.llm_extraction.instructor.from_provider"
         ) as mock_instructor:
             mock_instructor.side_effect = Exception("Failed to initialize client")
 

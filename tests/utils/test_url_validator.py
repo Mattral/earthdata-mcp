@@ -25,42 +25,32 @@ class TestExtractUrlsFromMetadata:
 
         assert len(urls) == 2
         assert urls[0]["url"] == "http://example.com/data1"
-        assert urls[0]["path"] == "$.RelatedUrls[0].URL"
-        assert urls[1]["path"] == "$.RelatedUrls[1].URL"
+        assert urls[0]["index"] == 0
+        assert urls[1]["index"] == 1
 
-    def test_extracts_data_center_urls(self):
-        """Should extract URLs from DataCenters."""
+    def test_ignores_data_center_urls(self):
+        """Should not extract URLs from DataCenters."""
         metadata = {
             "DataCenters": [
                 {"ContactInformation": {"RelatedUrls": [{"URL": "http://datacenter.example.com"}]}}
             ]
         }
 
-        urls = extract_urls_from_metadata(metadata)
+        assert not extract_urls_from_metadata(metadata)
 
-        assert len(urls) == 1
-        assert urls[0]["url"] == "http://datacenter.example.com"
-        assert "DataCenters[0]" in urls[0]["path"]
-
-    def test_extracts_citation_urls(self):
-        """Should extract URLs from CollectionCitations."""
+    def test_ignores_citation_urls(self):
+        """Should not extract URLs from CollectionCitations."""
         metadata = {
             "CollectionCitations": [{"OnlineResource": {"Linkage": "http://citation.example.com"}}]
         }
 
-        urls = extract_urls_from_metadata(metadata)
+        assert not extract_urls_from_metadata(metadata)
 
-        assert len(urls) == 1
-        assert urls[0]["url"] == "http://citation.example.com"
-
-    def test_extracts_license_url(self):
-        """Should extract LicenseURL."""
+    def test_ignores_license_url(self):
+        """Should not extract LicenseURL."""
         metadata = {"UseConstraints": {"LicenseURL": {"Linkage": "http://license.example.com"}}}
 
-        urls = extract_urls_from_metadata(metadata)
-
-        assert len(urls) == 1
-        assert urls[0]["url"] == "http://license.example.com"
+        assert not extract_urls_from_metadata(metadata)
 
     def test_handles_empty_metadata(self):
         """Should return empty list for metadata without URLs."""
