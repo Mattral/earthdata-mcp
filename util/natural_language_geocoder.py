@@ -85,7 +85,7 @@ def convert_text_to_geom(location_query: str) -> str:
             type(e).__name__,
         )
         logger.debug("Full traceback:", exc_info=True)
-        raise
+        return None
 
 
 def _normalize_geometry_to_wkt(geometry) -> str | None:

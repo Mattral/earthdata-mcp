@@ -364,7 +364,7 @@ class TestNormalizeGeometryToWkt:  # pylint: disable=too-many-public-methods
     @patch("util.natural_language_geocoder.BedrockNovaLLM")
     @patch("util.natural_language_geocoder.GeocodeIndexPlaceLookup")
     def test_handles_geometry_logging_exception(
-        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract, _caplog
+        self, _mock_lookup, _mock_llm, mock_simplify, mock_extract
     ):
         """Test that exceptions during geometry logging don't break the flow."""
         # Mock geometry that raises exception when accessing geom_type

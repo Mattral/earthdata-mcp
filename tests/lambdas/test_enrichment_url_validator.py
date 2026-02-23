@@ -271,7 +271,7 @@ class TestValidateUrlAsyncConnectionErrors:
         return MagicMock(spec=aiohttp.ClientSession)
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def test_connection_reset_treated_as_inconclusive(self, session):
         """Connection reset by peer should keep the URL (is_valid=True)."""
