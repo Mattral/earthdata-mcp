@@ -20,7 +20,7 @@ class TestExtractUrlsFromMetadata:
     """Tests for extract_urls_from_metadata."""
 
     def test_extracts_related_urls(self):
-        """Should extract URLs from RelatedUrls with correct paths."""
+        """Should extract URLs from RelatedUrls with correct indices."""
         metadata = {
             "RelatedUrls": [
                 {"URL": "https://example.com/data", "Type": "GET DATA"},
@@ -34,39 +34,33 @@ class TestExtractUrlsFromMetadata:
         urls = extract_urls_from_metadata(metadata)
         assert len(urls) == 2
         assert urls[0]["url"] == "https://example.com/data"
-        assert urls[0]["path"] == "$.RelatedUrls[0].URL"
+        assert urls[0]["index"] == 0
+        assert urls[1]["index"] == 1
 
-    def test_extracts_datacenter_urls(self):
-        """Should extract URLs from DataCenters contact information."""
+    def test_ignores_datacenter_urls(self):
+        """Should not extract URLs from DataCenters contact information."""
         metadata = {
             "DataCenters": [
                 {"ContactInformation": {"RelatedUrls": [{"URL": "https://center.example.com"}]}}
             ]
         }
-        urls = extract_urls_from_metadata(metadata)
-        assert len(urls) == 1
-        assert urls[0]["path"] == "$.DataCenters[0].ContactInformation.RelatedUrls[0].URL"
+        assert not extract_urls_from_metadata(metadata)
 
-    def test_extracts_collection_citations(self):
-        """Should extract URLs from CollectionCitations online resources."""
+    def test_ignores_collection_citations(self):
+        """Should not extract URLs from CollectionCitations."""
         metadata = {
             "CollectionCitations": [{"OnlineResource": {"Linkage": "https://doi.org/10.1234"}}]
         }
-        urls = extract_urls_from_metadata(metadata)
-        assert len(urls) == 1
-        assert urls[0]["url"] == "https://doi.org/10.1234"
-        assert urls[0]["path"] == "$.CollectionCitations[0].OnlineResource.Linkage"
+        assert not extract_urls_from_metadata(metadata)
 
-    def test_extracts_license_url(self):
-        """Should extract URL from UseConstraints LicenseURL."""
+    def test_ignores_license_url(self):
+        """Should not extract URL from UseConstraints LicenseURL."""
         metadata = {
             "UseConstraints": {
                 "LicenseURL": {"Linkage": "https://creativecommons.org/licenses/by/4.0/"}
             }
         }
-        urls = extract_urls_from_metadata(metadata)
-        assert len(urls) == 1
-        assert urls[0]["url"] == "https://creativecommons.org/licenses/by/4.0/"
+        assert not extract_urls_from_metadata(metadata)
 
     def test_empty_metadata(self):
         """Should return empty list for empty metadata."""
@@ -96,9 +90,9 @@ class TestRemoveDeadUrls:
             ]
         }
         url_info = [
-            {"url": "https://good.com", "path": "$.RelatedUrls[0].URL"},
-            {"url": "https://dead.com", "path": "$.RelatedUrls[1].URL"},
-            {"url": "https://also-good.com", "path": "$.RelatedUrls[2].URL"},
+            {"url": "https://good.com", "index": 0},
+            {"url": "https://dead.com", "index": 1},
+            {"url": "https://also-good.com", "index": 2},
         ]
         results = [
             URLValidationResult(url="https://good.com", is_valid=True),
@@ -116,7 +110,7 @@ class TestRemoveDeadUrls:
     def test_cleans_up_empty_related_urls_array(self):
         """Should remove RelatedUrls key when all URLs are dead."""
         metadata = {"RelatedUrls": [{"URL": "https://dead.com"}]}
-        url_info = [{"url": "https://dead.com", "path": "$.RelatedUrls[0].URL"}]
+        url_info = [{"url": "https://dead.com", "index": 0}]
         results = [URLValidationResult(url="https://dead.com", is_valid=False)]
 
         _remove_dead_urls(metadata, url_info, results)
@@ -133,9 +127,9 @@ class TestRemoveDeadUrls:
             ]
         }
         url_info = [
-            {"url": "https://dead1.com", "path": "$.RelatedUrls[0].URL"},
-            {"url": "https://good.com", "path": "$.RelatedUrls[1].URL"},
-            {"url": "https://dead2.com", "path": "$.RelatedUrls[2].URL"},
+            {"url": "https://dead1.com", "index": 0},
+            {"url": "https://good.com", "index": 1},
+            {"url": "https://dead2.com", "index": 2},
         ]
         results = [
             URLValidationResult(url="https://dead1.com", is_valid=False),
@@ -152,7 +146,7 @@ class TestRemoveDeadUrls:
     def test_no_removals_when_all_valid(self):
         """Should not remove any URLs when all are valid."""
         metadata = {"RelatedUrls": [{"URL": "https://good.com"}]}
-        url_info = [{"url": "https://good.com", "path": "$.RelatedUrls[0].URL"}]
+        url_info = [{"url": "https://good.com", "index": 0}]
         results = [URLValidationResult(url="https://good.com", is_valid=True)]
 
         removed = _remove_dead_urls(metadata, url_info, results)
@@ -167,7 +161,7 @@ class TestApplyHttpsUpgrades:
     def test_upgrades_http_to_https(self):
         """Should upgrade HTTP URLs to HTTPS in metadata."""
         metadata = {"RelatedUrls": [{"URL": "http://example.com"}]}
-        url_info = [{"url": "http://example.com", "path": "$.RelatedUrls[0].URL"}]
+        url_info = [{"url": "http://example.com", "index": 0}]
         results = [
             URLValidationResult(
                 url="http://example.com",
@@ -184,7 +178,7 @@ class TestApplyHttpsUpgrades:
     def test_skips_already_https(self):
         """Should not upgrade URLs that are already HTTPS."""
         metadata = {"RelatedUrls": [{"URL": "https://example.com"}]}
-        url_info = [{"url": "https://example.com", "path": "$.RelatedUrls[0].URL"}]
+        url_info = [{"url": "https://example.com", "index": 0}]
         results = [
             URLValidationResult(
                 url="https://example.com",
@@ -199,7 +193,7 @@ class TestApplyHttpsUpgrades:
 
     def test_skips_invalid_urls(self):
         """Should not upgrade invalid URLs even if they were HTTP."""
-        url_info = [{"url": "http://dead.com", "path": "$.RelatedUrls[0].URL"}]
+        url_info = [{"url": "http://dead.com", "index": 0}]
         results = [
             URLValidationResult(
                 url="http://dead.com",

@@ -1,6 +1,6 @@
-"""URL validation and fixing for UMM metadata.
+"""URL validation and fixing for UMM metadata RelatedUrls.
 
-Validates URLs using HEAD requests, then acts on findings:
+Validates RelatedUrls using HEAD requests, then acts on findings:
 - Upgrades HTTP → HTTPS where the secure version works
 - Removes dead/unreachable URLs from metadata
 """
@@ -8,14 +8,12 @@ Validates URLs using HEAD requests, then acts on findings:
 import asyncio
 import copy
 import logging
-import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
 
-from lambdas.enrichment.umm.json_path import get_value_at_path, set_value_at_path
 from util.cache import get_cache_client
 
 logger = logging.getLogger(__name__)
@@ -77,54 +75,18 @@ class URLValidationSummary:
 
 def extract_urls_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Extract all URLs from UMM metadata.
+    Extract RelatedUrls from UMM metadata for validation and fixing.
 
-    Returns a list of dicts with 'url' and 'path' (JSON path) keys.
+    Only examines top-level RelatedUrls — other URL fields (LicenseURL,
+    CollectionCitations, DataCenter contact URLs) are left untouched.
+
+    Returns a list of dicts with 'url' and 'index' keys.
     """
     urls = []
 
-    # RelatedUrls
     for i, related_url in enumerate(metadata.get("RelatedUrls") or []):
         if url := related_url.get("URL"):
-            urls.append(
-                {
-                    "url": url,
-                    "path": f"$.RelatedUrls[{i}].URL",
-                }
-            )
-
-    # DataCenters URLs
-    for i, dc in enumerate(metadata.get("DataCenters") or []):
-        if contact_info := dc.get("ContactInformation"):
-            for j, url_obj in enumerate(contact_info.get("RelatedUrls") or []):
-                if url := url_obj.get("URL"):
-                    urls.append(
-                        {
-                            "url": url,
-                            "path": f"$.DataCenters[{i}].ContactInformation.RelatedUrls[{j}].URL",
-                        }
-                    )
-
-    # CollectionCitations
-    for i, citation in enumerate(metadata.get("CollectionCitations") or []):
-        if url := citation.get("OnlineResource", {}).get("Linkage"):
-            urls.append(
-                {
-                    "url": url,
-                    "path": f"$.CollectionCitations[{i}].OnlineResource.Linkage",
-                }
-            )
-
-    # UseConstraints LicenseURL
-    if (use_constraints := metadata.get("UseConstraints")) and (
-        license_url := use_constraints.get("LicenseURL", {}).get("Linkage")
-    ):
-        urls.append(
-            {
-                "url": license_url,
-                "path": "$.UseConstraints.LicenseURL.Linkage",
-            }
-        )
+            urls.append({"url": url, "index": i})
 
     return urls
 
@@ -322,50 +284,28 @@ def _remove_dead_urls(
     results: list[URLValidationResult],
 ) -> list[str]:
     """
-    Remove dead URLs from metadata.
+    Remove dead RelatedUrls from metadata.
 
-    Groups removals by parent array and pops indices in reverse order
-    to avoid index shifting.
-
+    Pops indices in reverse order to avoid index shifting.
     Returns list of removed URL strings.
     """
-    # Group removals by parent array path
-    removals: dict[str, list[int]] = {}
+    related_urls = metadata.get("RelatedUrls")
+    if not related_urls:
+        return []
+
     removed_urls: list[str] = []
+    dead_indices: list[int] = []
 
     for url_entry, result in zip(url_info, results, strict=True):
-        if result.is_valid:
-            continue
+        if not result.is_valid:
+            dead_indices.append(url_entry["index"])
+            removed_urls.append(url_entry["url"])
 
-        path = url_entry["path"]
-        # Parse path to find the array and index
-        # e.g. "$.RelatedUrls[2].URL" → array_path="$.RelatedUrls", index=2
-        # e.g. "$.DataCenters[0].ContactInformation.RelatedUrls[1].URL"
-        #   → array_path="$.DataCenters[0].ContactInformation.RelatedUrls", index=1
+    for idx in sorted(dead_indices, reverse=True):
+        if idx < len(related_urls):
+            related_urls.pop(idx)
 
-        # Find the last [N] before .URL (or .Linkage)
-        bracket_match = list(re.finditer(r"\[(\d+)\]", path))
-        if not bracket_match:
-            continue
-
-        last_bracket = bracket_match[-1]
-        index = int(last_bracket.group(1))
-        array_path = path[: last_bracket.start()]
-
-        removals.setdefault(array_path, []).append(index)
-        removed_urls.append(url_entry["url"])
-
-    # Remove in reverse index order per array
-    for array_path, indices in removals.items():
-        arr = get_value_at_path(metadata, array_path)
-        if not isinstance(arr, list):
-            continue
-        for idx in sorted(indices, reverse=True):
-            if idx < len(arr):
-                arr.pop(idx)
-
-    # Clean up empty arrays left after removal
-    if "RelatedUrls" in metadata and not metadata["RelatedUrls"]:
+    if not related_urls:
         del metadata["RelatedUrls"]
 
     return removed_urls
@@ -376,12 +316,12 @@ def _apply_https_upgrades(
     url_info: list[dict[str, Any]],
     results: list[URLValidationResult],
 ) -> list[dict[str, str]]:
-    """Upgrade HTTP URLs to HTTPS in metadata. Returns list of upgrades."""
+    """Upgrade HTTP RelatedUrls to HTTPS in metadata. Returns list of upgrades."""
     fixed = []
     for url_entry, result in zip(url_info, results, strict=True):
         if result.is_valid and result.upgraded_to_https:
             https_url = url_entry["url"].replace("http://", "https://", 1)
-            set_value_at_path(metadata, url_entry["path"], https_url)
+            metadata["RelatedUrls"][url_entry["index"]]["URL"] = https_url
             fixed.append({"original": url_entry["url"], "fixed": https_url})
     return fixed
 
@@ -390,7 +330,7 @@ def validate_metadata_urls(
     metadata: dict[str, Any],
 ) -> tuple[dict[str, Any], URLValidationSummary]:
     """
-    Validate and fix all URLs in UMM metadata.
+    Validate and fix RelatedUrls in UMM metadata.
 
     Applies two fixes:
     1. Upgrades HTTP → HTTPS where the secure version is reachable
