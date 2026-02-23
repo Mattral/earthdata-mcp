@@ -46,7 +46,7 @@ class TestHandler:
 
         with (
             patch("lambdas.enrichment.handler.importlib") as mock_importlib,
-            patch("lambdas.enrichment.handler.get_langfuse", return_value=None),
+            patch("lambdas.enrichment.handler.trace_update"),
             patch("lambdas.enrichment.handler.flush_langfuse"),
         ):
             mock_importlib.import_module.return_value = fake_mod
@@ -62,7 +62,7 @@ class TestHandler:
     def test_raises_on_unknown_action(self):
         """Should raise ValueError for unknown action (module not found)."""
         with (
-            patch("lambdas.enrichment.handler.get_langfuse", return_value=None),
+            patch("lambdas.enrichment.handler.trace_update"),
             patch("lambdas.enrichment.handler.flush_langfuse"),
             patch("lambdas.enrichment.handler.importlib") as mock_importlib,
             pytest.raises(ValueError, match="Unknown action"),
@@ -73,7 +73,7 @@ class TestHandler:
     def test_raises_on_missing_action(self):
         """Should raise ValueError when action key is missing."""
         with (
-            patch("lambdas.enrichment.handler.get_langfuse", return_value=None),
+            patch("lambdas.enrichment.handler.trace_update"),
             patch("lambdas.enrichment.handler.flush_langfuse"),
             pytest.raises(ValueError, match="Missing 'action'"),
         ):
@@ -85,7 +85,7 @@ class TestHandler:
 
         with (
             patch("lambdas.enrichment.handler.importlib") as mock_importlib,
-            patch("lambdas.enrichment.handler.get_langfuse", return_value=None),
+            patch("lambdas.enrichment.handler.trace_update"),
             patch("lambdas.enrichment.handler.flush_langfuse"),
             pytest.raises(RuntimeError, match="boom"),
         ):
@@ -98,7 +98,7 @@ class TestHandler:
 
         with (
             patch("lambdas.enrichment.handler.importlib") as mock_importlib,
-            patch("lambdas.enrichment.handler.get_langfuse", return_value=None),
+            patch("lambdas.enrichment.handler.trace_update"),
             patch("lambdas.enrichment.handler.flush_langfuse") as mock_flush,
         ):
             mock_importlib.import_module.return_value = fake_mod
@@ -112,7 +112,7 @@ class TestHandler:
 
         with (
             patch("lambdas.enrichment.handler.importlib") as mock_importlib,
-            patch("lambdas.enrichment.handler.get_langfuse", return_value=None),
+            patch("lambdas.enrichment.handler.trace_update"),
             patch("lambdas.enrichment.handler.flush_langfuse") as mock_flush,
             pytest.raises(RuntimeError),
         ):
@@ -120,3 +120,20 @@ class TestHandler:
             handler({"action": "fetch", "payload": {}}, None)
 
         mock_flush.assert_called_once()
+
+    def test_sets_session_id_from_concept_id(self):
+        """Should set Langfuse session_id to enrich-{concept_id}."""
+        fake_mod = _make_fake_module()
+
+        with (
+            patch("lambdas.enrichment.handler.importlib") as mock_importlib,
+            patch("lambdas.enrichment.handler.trace_update") as mock_trace_update,
+            patch("lambdas.enrichment.handler.flush_langfuse"),
+        ):
+            mock_importlib.import_module.return_value = fake_mod
+            handler({"action": "fetch", "payload": {"concept_id": "C1234-PROV"}}, None)
+
+        mock_trace_update.assert_called_once_with(
+            session_id="enrich-C1234-PROV",
+            metadata={"concept_id": "C1234-PROV", "action": "fetch"},
+        )

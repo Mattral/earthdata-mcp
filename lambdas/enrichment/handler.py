@@ -4,14 +4,19 @@ Single Lambda that dispatches to step handlers based on the 'action' field
 injected by the Step Function via Parameters.
 
 Each step module exposes a handle() function decorated with @observe,
-which automatically nests under the Langfuse trace created here.
+which automatically nests as a span under the parent trace created here
+via @observe on handler(). All steps sharing the same session_id are
+grouped together in Langfuse.
+
 The action name maps directly to the module name under lambdas.enrichment.
 """
 
 import importlib
 import logging
 
-from util.langfuse import flush_langfuse, get_langfuse
+from langfuse import observe
+
+from util.langfuse import flush_langfuse, trace_update
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +33,7 @@ def _extract_trace_output(result: dict) -> dict:
     return {k: v for k, v in result.items() if k not in _TRACE_EXCLUDE_FIELDS}
 
 
+@observe(name="enrichment")
 def handler(event, context):
     """Route to the appropriate sub-handler based on the action field."""
     action = event.get("action")
@@ -46,40 +52,13 @@ def handler(event, context):
     payload = event.get("payload", {})
     concept_id = payload.get("concept_id", "unknown")
 
-    langfuse = get_langfuse()
-    trace = None
-
-    if langfuse:
-        try:
-            trace = langfuse.trace(
-                name=f"enrichment:{action}",
-                session_id=f"enrich-{concept_id}",
-                metadata={
-                    "concept_id": concept_id,
-                    "action": action,
-                },
-            )
-        except Exception as e:
-            logger.debug("Failed to create Langfuse trace: %s", e)
+    trace_update(
+        session_id=f"enrich-{concept_id}",
+        metadata={"concept_id": concept_id, "action": action},
+    )
 
     try:
         result = module.handle(payload, context)
-
-        if trace:
-            try:
-                trace.update(output=_extract_trace_output(result))
-            except Exception as exc:
-                logger.debug("Failed to update Langfuse trace: %s", exc)
-
         return result
-
-    except Exception as e:
-        if trace:
-            try:
-                trace.update(level="ERROR", status_message=str(e))
-            except Exception as exc:
-                logger.debug("Failed to update Langfuse trace: %s", exc)
-        raise
-
     finally:
         flush_langfuse()
