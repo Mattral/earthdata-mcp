@@ -134,33 +134,29 @@ def _jsonschema_error_to_validation_error(
             path_parts.append(f".{part}")
     json_path = "".join(path_parts)
 
-    # Determine error type
     error_type = error.validator
     allowed_values = None
     schema_fragment = None
 
-    # Extract allowed values for enum errors
+    # For enum errors, capture the allowed values directly.
+    # For all other error types, extract the constraint-relevant subset of
+    # the schema node so the fixer has enough context to attempt a repair.
+    CONSTRAINT_KEYS = {
+        "type",
+        "pattern",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "enum",
+        "required",
+    }
+
     if error.validator == "enum":
         allowed_values = list(error.validator_value)
         schema_fragment = {"enum": allowed_values}
-
-    # Extract schema fragment for other errors
-    if error.schema:
-        schema_fragment = {
-            k: v
-            for k, v in error.schema.items()
-            if k
-            in (
-                "type",
-                "pattern",
-                "minLength",
-                "maxLength",
-                "minimum",
-                "maximum",
-                "enum",
-                "required",
-            )
-        }
+    elif error.schema:
+        schema_fragment = {k: v for k, v in error.schema.items() if k in CONSTRAINT_KEYS}
 
     return ValidationError(
         path=json_path,
@@ -230,8 +226,12 @@ def _extract_kms_terms_for_validation(metadata: dict[str, Any]) -> list[tuple[st
     return terms
 
 
-def _build_kms_path(term: str, scheme: str, metadata: dict[str, Any]) -> str:
-    """Build JSON path for a KMS term in the metadata."""
+def _build_kms_path(term: str, scheme: str, metadata: dict[str, Any]) -> str | None:
+    """Build JSON path for a KMS term in the metadata.
+
+    Returns None if the term cannot be located — callers should log this
+    rather than silently falling back to a vague root path.
+    """
     if scheme == "sciencekeywords":
         keyword_levels = get_science_keyword_levels(metadata)
         if keyword_levels:
@@ -249,7 +249,7 @@ def _build_kms_path(term: str, scheme: str, metadata: dict[str, Any]) -> str:
                 if instrument.get("ShortName") == term:
                     return f"$.Platforms[{i}].Instruments[{j}].ShortName"
 
-    return f"$.{scheme}"
+    return None
 
 
 def get_science_keyword_levels(metadata: dict[str, Any]) -> list[str] | None:
@@ -362,6 +362,10 @@ def validate_kms_keywords(metadata: dict[str, Any]) -> list[ValidationError]:
         if kms_term is None:
             seen.add((term, scheme))
             path = _build_kms_path(term, scheme, metadata)
+            if path is None:
+                logger.warning(
+                    "Could not locate KMS term '%s' (scheme '%s') in metadata", term, scheme
+                )
             errors.append(
                 ValidationError(
                     path=path,

@@ -6,7 +6,6 @@ concurrent pattern-match requests that can overwhelm the gateway.
 """
 
 import logging
-import time
 from urllib.parse import quote
 
 import requests
@@ -103,14 +102,64 @@ def _fetch_scheme(scheme: str) -> dict[str, dict]:
 _FETCH_MAX_RETRIES = 3
 _FETCH_RETRY_DELAY = 2  # seconds
 
+_LOCK_TTL = 60  # seconds — margin over the ~10-15s a paginated KMS fetch takes
+
+
+def _get_lock_key(scheme: str) -> str:
+    """Generate Redis lock key for a KMS scheme fetch."""
+    return f"kms:lock:{scheme}"
+
+
+def warm_scheme(scheme: str) -> str:
+    """Non-blocking cache warm for a single KMS scheme.
+
+    Called by the WarmKMSCache step function state.  Returns immediately in
+    every path so the Lambda never idles:
+
+    - ``"cached"``  — scheme already in Redis
+    - ``"fetched"`` — this invocation fetched from KMS and cached it
+    - ``"locked"``  — another Lambda holds the fetch lock; caller should retry
+
+    On fetch failure the lock is released and ``"locked"`` is returned so the
+    Step Function retries via its Wait state.
+    """
+    cache = get_cache_client()
+    cache_key = _get_scheme_cache_key(scheme)
+
+    if cache.hexists(cache_key):
+        return "cached"
+
+    lock_key = _get_lock_key(scheme)
+    if not cache.setnx(lock_key, "1", _LOCK_TTL):
+        return "locked"
+
+    # We hold the lock — fetch, cache, release
+    try:
+        terms = _fetch_scheme(scheme)
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("Failed to fetch KMS scheme '%s' during warm: %s", scheme, e)
+        cache.delete(lock_key)
+        return "locked"
+
+    if not terms:
+        logger.warning("KMS scheme '%s' returned no terms during warm", scheme)
+        cache.delete(lock_key)
+        return "locked"
+
+    if not cache.hmset(cache_key, terms, ttl=KMS_CACHE_TTL):
+        logger.warning("Failed to cache KMS scheme '%s' during warm", scheme)
+
+    cache.delete(lock_key)
+    return "fetched"
+
 
 def _ensure_scheme_cached(scheme: str) -> dict[str, dict] | None:
     """
     Ensure a KMS scheme is cached in Redis, or fetch it.
 
-    On fetch failure, retries up to ``_FETCH_MAX_RETRIES`` times with a short
-    delay.  Before each retry, re-checks the cache — another Lambda may have
-    succeeded in the meantime.
+    Called during lookup after the WarmKMSCache step has already run, so the
+    cache is expected to be warm.  Falls back to fetching directly on cache
+    miss (e.g. TTL expiry mid-pipeline).
 
     Returns:
         {} (empty dict) if scheme is already cached
@@ -119,12 +168,11 @@ def _ensure_scheme_cached(scheme: str) -> dict[str, dict] | None:
     """
     cache = get_cache_client()
 
-    # Check if already cached
     cache_key = _get_scheme_cache_key(scheme)
     if cache.hexists(cache_key):
         return {}
 
-    # Fetch the entire scheme, retrying on transient failures
+    # Cache miss — fetch directly (warm step should have handled this)
     terms = None
     for attempt in range(_FETCH_MAX_RETRIES):
         try:
@@ -137,25 +185,20 @@ def _ensure_scheme_cached(scheme: str) -> dict[str, dict] | None:
                 _FETCH_MAX_RETRIES,
                 e,
             )
-            time.sleep(_FETCH_RETRY_DELAY)
-            # Another Lambda may have populated the cache while we waited
             if cache.hexists(cache_key):
                 logger.info("KMS scheme '%s' now in cache (populated by another Lambda)", scheme)
                 return {}
             continue
 
-        # Fetch succeeded — stop retrying
         if not terms:
             logger.warning("KMS scheme '%s' returned no terms", scheme)
             return None
 
-        # Attempt to cache — return terms regardless of cache success
         if not cache.hmset(cache_key, terms, ttl=KMS_CACHE_TTL):
             logger.warning("Failed to cache KMS scheme '%s', serving from fetch", scheme)
 
         return terms
 
-    # All retries exhausted
     logger.error("All %d attempts to fetch KMS scheme '%s' failed", _FETCH_MAX_RETRIES, scheme)
     return None
 
