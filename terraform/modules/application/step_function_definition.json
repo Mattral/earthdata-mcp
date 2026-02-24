@@ -10,7 +10,7 @@
         "payload.$": "$"
       },
       "ResultPath": "$",
-      "TimeoutSeconds": 60,
+      "TimeoutSeconds": 120,
       "Retry": [
         {
           "ErrorEquals": ["Lambda.TooManyRequestsException"],
@@ -252,7 +252,7 @@
         "payload.$": "$"
       },
       "ResultPath": "$",
-      "TimeoutSeconds": 60,
+      "TimeoutSeconds": 120,
       "Retry": [
         {
           "ErrorEquals": ["Lambda.TooManyRequestsException"],
