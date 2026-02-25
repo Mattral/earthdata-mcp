@@ -236,7 +236,7 @@ class TestGetDbConnection:
         conn = get_db_connection()
 
         mock_connect.assert_called_once_with(
-            "postgresql://user:pass@db.example.com:5432/mydb", autocommit=True
+            "postgresql://user:pass@db.example.com:5432/mydb", autocommit=True, sslmode="require"
         )
         mock_register.assert_called_once_with(mock_conn)
         mock_logger.info.assert_called_once_with("Created new database connection")
@@ -349,7 +349,7 @@ class TestGetDbConnection:
         conn = get_db_connection()
 
         mock_connect.assert_called_once_with(
-            "postgresql://user:pass@localhost:5432/mydb", autocommit=True
+            "postgresql://user:pass@localhost:5432/mydb", autocommit=True, sslmode="require"
         )
         log_messages = [str(call) for call in mock_logger.info.call_args_list]
         assert any("DB_HOST" in msg for msg in log_messages)

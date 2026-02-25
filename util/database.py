@@ -86,7 +86,7 @@ def get_db_connection() -> Any:
             except Exception as e:
                 logger.debug("Failed to close stale connection: %s", e)
         url = _get_connection_url()
-        _connection = psycopg.connect(url, autocommit=True)
+        _connection = psycopg.connect(url, autocommit=True, sslmode="require")
         register_vector(_connection)
         logger.info("Created new database connection")
     return _connection

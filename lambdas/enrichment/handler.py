@@ -36,32 +36,34 @@ def _extract_trace_output(result: dict) -> dict:
 @observe(name="enrichment")
 def handler(event, context):
     """Route to the appropriate sub-handler based on the action field."""
-    action = event.get("action")
-
-    if not action:
-        raise ValueError("Missing 'action' field in event")
-
-    # The action value (e.g. "fetch", "url_fix") maps directly to a module
-    # filename under lambdas/enrichment/. Each step module must be named to
-    # match its action and expose a handle(event, context) function.
     try:
-        module = importlib.import_module(f"lambdas.enrichment.{action}")
-    except ModuleNotFoundError as e:
-        raise ValueError(f"Unknown action: {action!r}") from e
+        action = event.get("action")
 
-    if not hasattr(module, "handle"):
-        raise ValueError(f"Module 'lambdas.enrichment.{action}' has no handle() function")
+        if not action:
+            raise ValueError("Missing 'action' field in event")
 
-    payload = event.get("payload", {})
-    concept_id = payload.get("concept_id", "unknown")
+        # The action value (e.g. "fetch", "url_fix") maps directly to a module
+        # filename under lambdas/enrichment/. Each step module must be named to
+        # match its action and expose a handle(event, context) function.
+        try:
+            module = importlib.import_module(f"lambdas.enrichment.{action}")
+        except ModuleNotFoundError as e:
+            raise ValueError(f"Unknown action: {action!r}") from e
 
-    trace_update(
-        session_id=f"enrich-{concept_id}",
-        metadata={"concept_id": concept_id, "action": action},
-    )
+        if not hasattr(module, "handle"):
+            raise ValueError(f"Module 'lambdas.enrichment.{action}' has no handle() function")
 
-    try:
-        result = module.handle(payload, context)
-        return result
+        payload = event.get("payload")
+        if payload is None:
+            raise ValueError(f"Missing 'payload' field in event for action {action!r}")
+
+        concept_id = payload.get("concept_id", "unknown")
+
+        trace_update(
+            session_id=f"enrich-{concept_id}",
+            metadata={"concept_id": concept_id, "action": action},
+        )
+
+        return module.handle(payload, context)
     finally:
         flush_langfuse()

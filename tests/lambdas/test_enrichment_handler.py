@@ -63,21 +63,35 @@ class TestHandler:
         """Should raise ValueError for unknown action (module not found)."""
         with (
             patch("lambdas.enrichment.handler.trace_update"),
-            patch("lambdas.enrichment.handler.flush_langfuse"),
+            patch("lambdas.enrichment.handler.flush_langfuse") as mock_flush,
             patch("lambdas.enrichment.handler.importlib") as mock_importlib,
             pytest.raises(ValueError, match="Unknown action"),
         ):
             mock_importlib.import_module.side_effect = ModuleNotFoundError("No module")
             handler({"action": "nonexistent", "payload": {}}, None)
 
+        mock_flush.assert_called_once()
+
     def test_raises_on_missing_action(self):
         """Should raise ValueError when action key is missing."""
         with (
             patch("lambdas.enrichment.handler.trace_update"),
-            patch("lambdas.enrichment.handler.flush_langfuse"),
+            patch("lambdas.enrichment.handler.flush_langfuse") as mock_flush,
             pytest.raises(ValueError, match="Missing 'action'"),
         ):
             handler({"payload": {}}, None)
+
+        mock_flush.assert_called_once()
+
+    def test_raises_on_missing_payload(self):
+        """Should raise ValueError and flush langfuse when payload is missing."""
+        with (
+            patch("lambdas.enrichment.handler.flush_langfuse") as mock_flush,
+            pytest.raises(ValueError, match="Missing 'payload'"),
+        ):
+            handler({"action": "fetch"}, None)
+
+        mock_flush.assert_called_once()
 
     def test_propagates_sub_handler_exception(self):
         """Should propagate exceptions from sub-handlers."""

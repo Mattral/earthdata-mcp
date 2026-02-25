@@ -181,7 +181,7 @@ class TestNormalizeGeometryToWkt:  # pylint: disable=too-many-public-methods
         from shapely import wkt as shapely_wkt
 
         oriented = shapely_wkt.loads(result)
-        assert oriented.geom_type in ("MULTIPOLYGON", "MultiPolygon")
+        assert oriented.geom_type == "MultiPolygon"
         for part in oriented.geoms:
             assert LinearRing(part.exterior.coords).is_ccw, (
                 f"Exterior ring of MultiPolygon part is not CCW: {part}"
