@@ -1,11 +1,12 @@
 """Tests for the enrichment utility module."""
 
+import copy
 from datetime import UTC, datetime
 
 from shapely import wkt
 
+from lambdas.enrichment.resolution import _enrich_spatial_resolution, _enrich_temporal_resolution
 from tests.conftest import GLOBAL_BOUNDING_BOX, generate_spatial_resolution_metadata
-from util.enrichment import enrich_collection_metadata
 from util.spatial import extract_spatial_extent, parse_spatial_resolution_from_title
 from util.temporal import extract_temporal_extent, parse_temporal_resolution_from_title
 
@@ -380,7 +381,7 @@ class TestParseSpatialResolutionFromTitle:
 
 
 class TestEnrichMetadata:
-    """Tests for enrich_collection_metadata function."""
+    """Tests for resolution enrichment logic."""
 
     def test_enriches_temporal_resolution_from_title(self):
         """Test that temporal resolution is enriched from title when missing."""
@@ -391,7 +392,8 @@ class TestEnrichMetadata:
             ],
         }
 
-        enriched = enrich_collection_metadata(metadata)
+        enriched = copy.deepcopy(metadata)
+        _enrich_temporal_resolution(enriched)
 
         assert "TemporalResolution" in enriched["TemporalExtents"][0]
         assert enriched["TemporalExtents"][0]["TemporalResolution"]["Value"] == 1
@@ -409,7 +411,8 @@ class TestEnrichMetadata:
             ],
         }
 
-        enriched = enrich_collection_metadata(metadata)
+        enriched = copy.deepcopy(metadata)
+        _enrich_temporal_resolution(enriched)
 
         # Should preserve the original 8-Day, not override with Daily from title
         assert enriched["TemporalExtents"][0]["TemporalResolution"]["Value"] == 8
@@ -421,7 +424,8 @@ class TestEnrichMetadata:
             "SpatialExtent": {"HorizontalSpatialDomain": {}},
         }
 
-        enriched = enrich_collection_metadata(metadata)
+        enriched = copy.deepcopy(metadata)
+        _enrich_spatial_resolution(enriched)
 
         horiz_res = enriched["SpatialExtent"]["HorizontalSpatialDomain"][
             "ResolutionAndCoordinateSystem"
@@ -435,7 +439,8 @@ class TestEnrichMetadata:
         metadata = generate_spatial_resolution_metadata(500, 500, "Meters")
         metadata["EntryTitle"] = "MODIS/Terra Land Surface Temperature Daily L3 Global 1km"
 
-        enriched = enrich_collection_metadata(metadata)
+        enriched = copy.deepcopy(metadata)
+        _enrich_spatial_resolution(enriched)
 
         # Should preserve the original 500m, not override with 1km from title
         horiz_res = enriched["SpatialExtent"]["HorizontalSpatialDomain"][
@@ -450,7 +455,8 @@ class TestEnrichMetadata:
             "TemporalExtents": [{}],
         }
 
-        enriched = enrich_collection_metadata(metadata)
+        enriched = copy.deepcopy(metadata)
+        _enrich_temporal_resolution(enriched)
 
         # Original should not have TemporalResolution
         assert "TemporalResolution" not in metadata["TemporalExtents"][0]

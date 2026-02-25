@@ -38,6 +38,16 @@ output "secret_name" {
   value       = module.database.secret_name
 }
 
+output "proxy_endpoint" {
+  description = "RDS Proxy endpoint hostname"
+  value       = module.database.proxy_endpoint
+}
+
+output "proxy_security_group_id" {
+  description = "Security group ID for the RDS Proxy"
+  value       = module.database.proxy_security_group_id
+}
+
 output "migration_lambda_arn" {
   description = "ARN of the migration Lambda function"
   value       = module.database.migration_lambda_arn

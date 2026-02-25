@@ -175,7 +175,7 @@ class TestSearchCmrGet:
 
         pages = list(search_cmr("collection", {}))
 
-        assert pages == []
+        assert not pages
 
     def test_raises_cmr_error_on_request_failure(self, monkeypatch):
         """Should raise CMRError when the HTTP request fails."""

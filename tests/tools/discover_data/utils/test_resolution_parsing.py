@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 
+from tests.conftest import generate_spatial_resolution_metadata
 from tools.discover_data.utils import resolution_parsing
 
 
@@ -47,19 +48,7 @@ def test_parse_temporal_resolution_none_when_missing():
 
 def test_parse_spatial_resolution_prefers_gridded_resolution():
     """Verify spatial resolution parsing from GriddedResolutions field."""
-    umm = {
-        "SpatialExtent": {
-            "HorizontalSpatialDomain": {
-                "ResolutionAndCoordinateSystem": {
-                    "HorizontalDataResolution": {
-                        "GriddedResolutions": [
-                            {"XDimension": 1.0, "Unit": "km"},
-                        ]
-                    }
-                }
-            }
-        }
-    }
+    umm = generate_spatial_resolution_metadata(1.0, 1.0, "km")
 
     res_str, res_m = resolution_parsing.parse_spatial_resolution(umm)
 
@@ -69,19 +58,9 @@ def test_parse_spatial_resolution_prefers_gridded_resolution():
 
 def test_parse_spatial_resolution_prefers_non_gridded_when_present():
     """Verify NonGriddedResolutions is used when GriddedResolutions unavailable."""
-    umm = {
-        "SpatialExtent": {
-            "HorizontalSpatialDomain": {
-                "ResolutionAndCoordinateSystem": {
-                    "HorizontalDataResolution": {
-                        "NonGriddedResolutions": [
-                            {"XDimension": 250, "Unit": "m"},
-                        ]
-                    }
-                }
-            }
-        }
-    }
+    umm = generate_spatial_resolution_metadata(
+        250, 250, "m", resolution_type="NonGriddedResolutions"
+    )
 
     res_str, res_m = resolution_parsing.parse_spatial_resolution(umm)
 
@@ -92,13 +71,10 @@ def test_parse_spatial_resolution_prefers_non_gridded_when_present():
 def test_parse_spatial_resolution_handles_varies_and_point():
     """Verify VariesResolution and PointResolution flags are handled correctly."""
     for key in ("VariesResolution", "PointResolution"):
-        umm = {
-            "SpatialExtent": {
-                "HorizontalSpatialDomain": {
-                    "ResolutionAndCoordinateSystem": {"HorizontalDataResolution": {key: True}}
-                }
-            }
-        }
+        umm = generate_spatial_resolution_metadata(0, 0, "")
+        umm["SpatialExtent"]["HorizontalSpatialDomain"]["ResolutionAndCoordinateSystem"][
+            "HorizontalDataResolution"
+        ] = {key: True}
         res_str, res_m = resolution_parsing.parse_spatial_resolution(umm)
         expected = "Varies" if key == "VariesResolution" else "Point"
         assert res_str == expected
@@ -167,20 +143,8 @@ def test_parse_temporal_coverage_ignores_invalid_dates():
 
 def test_parse_resolution_info_combines_temporal_and_spatial():
     """Verify parse_resolution_info combines temporal and spatial resolution data."""
-    umm = {
-        "TemporalExtents": [{"TemporalResolution": {"Unit": "Day", "Value": 16}}],
-        "SpatialExtent": {
-            "HorizontalSpatialDomain": {
-                "ResolutionAndCoordinateSystem": {
-                    "HorizontalDataResolution": {
-                        "GriddedResolutions": [
-                            {"XDimension": 500, "Unit": "m"},
-                        ]
-                    }
-                }
-            }
-        },
-    }
+    umm = generate_spatial_resolution_metadata(500, 500, "m")
+    umm["TemporalExtents"] = [{"TemporalResolution": {"Unit": "Day", "Value": 16}}]
 
     info = resolution_parsing.parse_resolution_info(umm)
 

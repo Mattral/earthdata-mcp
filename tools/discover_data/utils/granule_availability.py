@@ -5,6 +5,7 @@ Validates collections by checking for actual granule data within spatio-temporal
 constraints using CMR's granule endpoint.
 """
 
+import contextvars
 import hashlib
 import json
 import logging
@@ -18,7 +19,7 @@ from langfuse import observe
 from shapely import wkt as shapely_wkt
 from shapely.geometry import mapping
 
-from tools.models.output_model import CollectionMatch
+from models.tools.discover_data import CollectionMatch
 from util.cache import get_cache_client
 from util.cmr.client import search_cmr
 
@@ -179,7 +180,9 @@ def validate_granule_availability(
             if cached_result:
                 collection.granule_count = cached_result["count"]
             else:
+                ctx = contextvars.copy_context()
                 task = executor.submit(
+                    ctx.run,
                     _count_granules,
                     collection.concept_id,
                     temporal_start,

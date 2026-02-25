@@ -3,8 +3,8 @@
 import pytest
 import responses
 
+from models.tools.discover_data import CollectionMatch, ResolutionInfo
 from tools.discover_data.utils import disambiguation
-from tools.models.output_model import CollectionMatch, ResolutionInfo
 
 
 @pytest.fixture

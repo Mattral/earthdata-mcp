@@ -1,15 +1,17 @@
 """
-Ingest Lambda - SNS receiver that forwards concept events to FIFO queue.
+Ingest Lambda - SNS receiver that routes concept events to the embedding queue.
 
-Receives concept update/delete events from CMR SNS topic and pushes them
-to a FIFO SQS queue for ordered processing by the embedding lambda.
+Receives concept update/delete events from CMR SNS topic and forwards all
+messages to the embedding queue. The embedding lambda handles routing:
+- Updates: Triggers the enrichment Step Function (validates, fixes, then embeds)
+- Deletes: Removes stored data directly
 """
 
 import json
 import logging
 import os
 
-from util.models import ConceptMessage
+from models.cmr import ConceptMessage
 from util.sqs import get_sqs_client
 
 logging.basicConfig(level=logging.INFO)
@@ -20,12 +22,17 @@ def process_record(record: dict) -> dict:
     """
     Process a single SNS record from the event.
 
-    Parses and validates the message, then forwards it to the FIFO queue.
+    Forwards all messages to the embedding queue for processing.
     """
     sns_message = record.get("Sns", {})
     raw_message = json.loads(sns_message.get("Message", "{}"))
     message = ConceptMessage.model_validate(raw_message)
 
+    return _send_to_queue(message)
+
+
+def _send_to_queue(message: ConceptMessage) -> dict:
+    """Send a message to the embedding queue."""
     queue_url = os.environ.get("EMBEDDING_QUEUE_URL")
     if not queue_url:
         raise ValueError("EMBEDDING_QUEUE_URL environment variable not set")

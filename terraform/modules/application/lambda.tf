@@ -16,7 +16,7 @@ resource "aws_cloudwatch_log_group" "embedding" {
 # Ingest Lambda - container-based
 resource "aws_lambda_function" "ingest" {
   function_name = "${var.environment_name}-earthdata-mcp-ingest"
-  description   = "Receives metadata updates from SNS and queues them for embedding generation"
+  description   = "Receives metadata updates from SNS and routes to enrichment pipeline"
   role          = aws_iam_role.ingest_lambda.arn
   package_type  = "Image"
   image_uri     = var.ingest_lambda_image
@@ -64,11 +64,13 @@ resource "aws_lambda_function" "embedding" {
       ENVIRONMENT_NAME    = var.environment_name
       CMR_URL             = var.cmr_url
       DATABASE_SECRET_ID  = var.database_secret_arn
+      DB_HOST             = var.database_proxy_endpoint
       EMBEDDINGS_TABLE    = var.embeddings_table
       ASSOCIATIONS_TABLE  = var.associations_table
-      LANGFUSE_BASE_URL   = var.langfuse_host
-      LANGFUSE_PUBLIC_KEY = var.langfuse_public_key
-      REDIS_SECRET_ID     = aws_secretsmanager_secret.redis.arn
+      LANGFUSE_BASE_URL              = var.langfuse_host
+      LANGFUSE_PUBLIC_KEY            = var.langfuse_public_key
+      REDIS_SECRET_ID                = aws_secretsmanager_secret.redis.arn
+      ENRICHMENT_STATE_MACHINE_ARN   = aws_sfn_state_machine.enrichment.arn
     }
   }
 
@@ -87,7 +89,15 @@ resource "aws_lambda_function" "embedding" {
 resource "aws_lambda_event_source_mapping" "embedding" {
   event_source_arn = aws_sqs_queue.embedding.arn
   function_name    = aws_lambda_function.embedding.arn
-  batch_size       = 10
+  # Low batch size limits SFN executions launched per Lambda invocation.
+  # Each message starts one SFN execution that competes for enrichment
+  # Lambda concurrency slots in a shared account.
+  batch_size = 2
+
+  scaling_config {
+    # Limits concurrent SQS pollers to reduce SFN launch rate.
+    maximum_concurrency = 2
+  }
 
   function_response_types = ["ReportBatchItemFailures"]
 
@@ -110,6 +120,8 @@ resource "aws_lambda_function" "bootstrap" {
   image_uri     = var.bootstrap_lambda_image
   timeout       = var.bootstrap_lambda_timeout
   memory_size   = var.bootstrap_lambda_memory
+
+  reserved_concurrent_executions = var.bootstrap_lambda_concurrency
 
   environment {
     variables = {

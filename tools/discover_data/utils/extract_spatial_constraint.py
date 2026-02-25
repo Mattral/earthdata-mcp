@@ -2,19 +2,12 @@
 Spatial constraint extraction with LLM parsing, geocoding, and caching.
 """
 
-# pylint: disable=duplicate-code  # Intentional code patterns shared with extract_temporal_constraint.py
-
 import logging
-from datetime import UTC, datetime
 
-import instructor
 from langfuse import observe
 
-from tools.discover_data.models.extraction import (
-    ParsedSpatialExtraction,
-)
-from tools.discover_data.utils.llm_extraction import MODEL_ID, PROVIDER, load_extraction_prompt
-from tools.models.constraints import SpatialConstraint
+from models.tools.discover_data import ParsedSpatialExtraction, SpatialConstraint
+from tools.discover_data.utils.llm_extraction import run_llm_extraction
 from util.cache import get_cache_client
 from util.langfuse import trace_update
 from util.natural_language_geocoder import convert_text_to_geom
@@ -28,6 +21,13 @@ except Exception as e:
     cache = None
 
 
+def _capitalize_location(location: str) -> str:
+    """Capitalize first letter of a location name, preserving the rest."""
+    if not location:
+        return location
+    return location[0].upper() + location[1:] if len(location) > 1 else location.upper()
+
+
 @observe(name="extract_spatial_with_llm")
 def extract_spatial_with_llm(query: str) -> ParsedSpatialExtraction | None:
     """LLM-based spatial extraction.
@@ -39,67 +39,33 @@ def extract_spatial_with_llm(query: str) -> ParsedSpatialExtraction | None:
         ParsedSpatialExtraction (location name, contextual phrase, reasoning, cache key),
         or None when no spatial signal is found; raises on LLM setup/errors.
     """
-    try:
-        client = instructor.from_provider(f"{PROVIDER}/{MODEL_ID}")
-    except Exception as e:
-        trace_update(
-            tags=["error", "client_init_error"],
-            metadata={"error_type": "client_init_error", "message": str(e), "success": False},
-        )
-        raise RuntimeError(
-            f"Failed to initialize instructor client with provider '{PROVIDER}' and model '{MODEL_ID}': {e}"
-        ) from e
+    output = run_llm_extraction(
+        query=query,
+        prompt_filename="spatial_extraction.md",
+        response_model=ParsedSpatialExtraction,
+        extraction_label="spatial info",
+    )
 
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
-    system_prompt = load_extraction_prompt("spatial_extraction.md", today)
+    if not output.location_name and not output.location_with_context:
+        logger.debug("LLM returned no spatial information for query: %s", query)
+        return None
 
-    try:
-        output = client.create(
-            modelId=MODEL_ID,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
-            response_model=ParsedSpatialExtraction,
-        )
+    location_name = _capitalize_location(output.location_name) if output.location_name else None
+    location_with_context = (
+        _capitalize_location(output.location_with_context) if output.location_with_context else None
+    )
 
-        if not output.location_name and not output.location_with_context:
-            logger.debug("LLM returned no spatial information for query: %s", query)
-            return None
+    logger.debug(
+        "LLM extracted location: %s (canonical: %s)",
+        location_with_context,
+        location_name,
+    )
 
-        # Capitalize location names properly while preserving acronyms
-        # Only capitalize first letter, preserve acronyms and lowercase prepositions
-        def capitalize_location(location: str) -> str:
-            """Capitalize location name: first letter capitalized, preserve acronyms."""
-            if not location:
-                return location
-            # Capitalize first letter, keep rest as-is (preserves "of", "USA", etc.)
-            return location[0].upper() + location[1:] if len(location) > 1 else location.upper()
-
-        location_name = capitalize_location(output.location_name) if output.location_name else None
-        location_with_context = (
-            capitalize_location(output.location_with_context)
-            if output.location_with_context
-            else None
-        )
-
-        logger.debug(
-            "LLM extracted location: %s (canonical: %s)",
-            location_with_context,
-            location_name,
-        )
-
-        return ParsedSpatialExtraction(
-            location_name=location_name,
-            location_with_context=location_with_context,
-            reasoning=output.reasoning,
-        )
-    except Exception as e:
-        trace_update(
-            tags=["error", "llm_error"],
-            metadata={"error_type": "llm_error", "message": str(e), "success": False},
-        )
-        raise RuntimeError(f"Failed to extract spatial info from query '{query}': {e}") from e
+    return ParsedSpatialExtraction(
+        location_name=location_name,
+        location_with_context=location_with_context,
+        reasoning=output.reasoning,
+    )
 
 
 @observe(name="extract_spatial_constraint")
@@ -149,8 +115,8 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
                     wkt_geometry=cached_geom,
                     reasoning=f"{extraction.reasoning} (cached)",
                 )
-        except Exception as e:
-            logger.debug("Cache lookup failed: %s", e)
+        except Exception as exc:
+            logger.debug("Cache lookup failed: %s", exc)
 
     # Cache miss or cache disabled - geocode the location
     try:
@@ -176,8 +142,8 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
             try:
                 cache_key = extraction.cache_key
                 cache.set(cache_key, geom, ttl=900)
-            except Exception as e:
-                logger.debug("Cache store failed: %s", e)
+            except Exception as exc:
+                logger.debug("Cache store failed: %s", exc)
 
         trace_update(
             tags=["cache_miss", "success", "geocoded"],
@@ -198,29 +164,35 @@ def extract_spatial_constraint(query: str) -> SpatialConstraint:  # pylint: disa
             reasoning=extraction.reasoning,
         )
 
-    except (ValueError, TypeError) as e:
-        logger.warning("Invalid location format for '%s': %s", location_to_geocode, e)
+    except (ValueError, TypeError) as exc:
+        logger.warning("Invalid location format for '%s': %s", location_to_geocode, exc)
         trace_update(
             tags=["error", "validation_error"],
-            metadata={"error_type": "validation_error"},
-        )
-        return SpatialConstraint(
-            location=location_to_geocode,
-            wkt_geometry=None,
-            reasoning=extraction.reasoning,
-        )
-
-    except Exception as e:
-        logger.exception("Unexpected error geocoding '%s'", location_to_geocode)
-        trace_update(
-            tags=["error", "exception"],
             metadata={
-                "error_type": "exception",
-                "exception_class": type(e).__name__,
+                "error_type": "validation_error",
+                "error_message": str(exc),
+                "location": location_to_geocode,
             },
         )
         return SpatialConstraint(
             location=location_to_geocode,
             wkt_geometry=None,
-            reasoning=extraction.reasoning,
+            reasoning="Unable to resolve location to a geographic area.",
+        )
+
+    except Exception as exc:
+        logger.exception("Unexpected error geocoding '%s'", location_to_geocode)
+        trace_update(
+            tags=["error", "exception"],
+            metadata={
+                "error_type": "exception",
+                "exception_class": type(exc).__name__,
+                "error_message": str(exc),
+                "location": location_to_geocode,
+            },
+        )
+        return SpatialConstraint(
+            location=location_to_geocode,
+            wkt_geometry=None,
+            reasoning="Spatial search is temporarily unavailable. Please try again.",
         )

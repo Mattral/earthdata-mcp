@@ -1,0 +1,28 @@
+# Ignore everything by default
+*
+
+# pyproject.toml, uv.lock
+!pyproject.toml
+!uv.lock
+
+# server.py, loader.py
+!server.py
+!loader.py
+
+# middleware/
+!middleware/
+
+# models/
+!models/
+
+# tools/
+!tools/
+
+# util/
+!util/
+
+# Exclude artifacts from allowed dirs
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache

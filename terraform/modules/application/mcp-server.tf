@@ -238,6 +238,10 @@ resource "aws_ecs_task_definition" "mcp" {
           value = var.database_secret_arn
         },
         {
+          name  = "DB_HOST"
+          value = var.database_proxy_endpoint
+        },
+        {
           name  = "CMR_URL"
           value = var.cmr_url
         },
@@ -276,6 +280,10 @@ resource "aws_ecs_task_definition" "mcp" {
         {
           name  = "SIMPLIFY_GEOM_MAX_POINT"
           value = var.simplify_geom_max_point
+        },
+        {
+          name  = "GRANULE_VALIDATION_MAX_WORKERS"
+          value = var.granule_validation_max_workers
         }
       ]
 

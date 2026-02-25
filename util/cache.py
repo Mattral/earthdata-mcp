@@ -117,6 +117,32 @@ class CacheClient(ABC):
         """
 
     @abstractmethod
+    def delete(self, key: str) -> bool:
+        """
+        Delete a key from cache.
+
+        Args:
+            key: Cache key to delete
+
+        Returns:
+            True if deleted, False otherwise
+        """
+
+    @abstractmethod
+    def setnx(self, key: str, value: str, ttl: int) -> bool:
+        """
+        Set a key only if it does not already exist (distributed lock primitive).
+
+        Args:
+            key: Lock key
+            value: Lock value (e.g. identifier)
+            ttl: Time to live in seconds
+
+        Returns:
+            True if the key was set (lock acquired), False otherwise
+        """
+
+    @abstractmethod
     def hexists(self, key: str) -> bool:
         """
         Check if a hash key exists in cache.
@@ -334,6 +360,38 @@ class RedisCache(CacheClient):
 
         except (RedisError, TypeError, ValueError) as e:
             logger.warning("Hash write error for key '%s': %s", key, e)
+            return False
+
+    def delete(self, key: str) -> bool:
+        """Delete a key from Redis."""
+        if not self.is_available():
+            return False
+
+        try:
+            return self.client.delete(key) > 0
+        except RedisError as e:
+            logger.warning("Delete error for key '%s': %s", key, e)
+            return False
+
+    def setnx(self, key: str, value: str, ttl: int) -> bool:
+        """
+        Set a key only if it does not already exist (SET NX EX).
+
+        Args:
+            key: Lock key
+            value: Lock value
+            ttl: Time to live in seconds
+
+        Returns:
+            True if the key was set (lock acquired), False otherwise
+        """
+        if not self.is_available():
+            return False
+
+        try:
+            return bool(self.client.set(key, value, nx=True, ex=ttl))
+        except RedisError as e:
+            logger.warning("SETNX error for key '%s': %s", key, e)
             return False
 
     def hexists(self, key: str) -> bool:

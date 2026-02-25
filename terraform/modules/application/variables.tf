@@ -30,6 +30,16 @@ variable "database_security_group_id" {
   type        = string
 }
 
+variable "database_proxy_endpoint" {
+  description = "RDS Proxy endpoint hostname for DB_HOST override"
+  type        = string
+}
+
+variable "database_proxy_security_group_id" {
+  description = "Security group ID of the RDS Proxy (for Lambda/MCP egress rules)"
+  type        = string
+}
+
 # ECR
 variable "ingest_lambda_image" {
   description = "ECR image URI for ingest lambda"
@@ -43,6 +53,11 @@ variable "embedding_lambda_image" {
 
 variable "bootstrap_lambda_image" {
   description = "ECR image URI for bootstrap lambda"
+  type        = string
+}
+
+variable "enrichment_lambda_image" {
+  description = "ECR image URI for enrichment pipeline lambdas"
   type        = string
 }
 
@@ -69,7 +84,7 @@ variable "ingest_lambda_memory" {
 variable "ingest_lambda_concurrency" {
   description = "Reserved concurrent executions for ingest lambda"
   type        = number
-  default     = 10
+  default     = 5
 }
 
 variable "embedding_lambda_timeout" {
@@ -87,7 +102,19 @@ variable "embedding_lambda_memory" {
 variable "embedding_lambda_concurrency" {
   description = "Reserved concurrent executions for embedding lambda"
   type        = number
-  default     = 10
+  default     = 5
+}
+
+variable "enrichment_lambda_concurrency" {
+  description = "Reserved concurrent executions for enrichment lambda. Controls Step Function pipeline throughput — each collection requires 7+ sequential Lambda invocations."
+  type        = number
+  default     = 50
+}
+
+variable "bootstrap_lambda_concurrency" {
+  description = "Reserved concurrent executions for bootstrap lambda. Caps bulk-load flood into the embedding queue."
+  type        = number
+  default     = 40
 }
 
 variable "bootstrap_lambda_timeout" {
@@ -199,7 +226,13 @@ variable "geocode_index_port" {
 variable "simplify_geom_max_point" {
   description = "Maximum number of points for simplified geometries"
   type        = string
-  default     = ""
+  default     = "4900"
+}
+
+variable "granule_validation_max_workers" {
+  description = "Max concurrent threads for granule availability checks in the MCP server"
+  type        = string
+  default     = "10"
 }
 
 variable "tags" {

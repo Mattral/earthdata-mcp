@@ -33,7 +33,9 @@ set -e
 # | bamboo_GEOCODE_INDEX_HOST       | No       |                                |
 # | bamboo_GEOCODE_INDEX_REGION     | No       |                                |
 # | bamboo_GEOCODE_INDEX_PORT       | No       |                                |
-# | bamboo_SIMPLIFY_GEOM_MAX_POINT  | No       |                                |
+# | bamboo_SIMPLIFY_GEOM_MAX_POINT  | No       | 4900                           |
+# | bamboo_EMBEDDING_LAMBDA_CONCURRENCY   | No | 10                             |
+# | bamboo_ENRICHMENT_LAMBDA_CONCURRENCY  | No | 500                            |
 # +---------------------------------+----------+--------------------------------+
 
 # Set AWS credentials from Bamboo variables
@@ -71,6 +73,8 @@ export TF_VAR_load_balancer_name="${bamboo_LOAD_BALANCER_NAME}"
 [ -n "$bamboo_GEOCODE_INDEX_REGION" ] && export TF_VAR_geocode_index_region="$bamboo_GEOCODE_INDEX_REGION"
 [ -n "$bamboo_GEOCODE_INDEX_PORT" ] && export TF_VAR_geocode_index_port="$bamboo_GEOCODE_INDEX_PORT"
 [ -n "$bamboo_SIMPLIFY_GEOM_MAX_POINT" ] && export TF_VAR_simplify_geom_max_point="$bamboo_SIMPLIFY_GEOM_MAX_POINT"
+[ -n "$bamboo_EMBEDDING_LAMBDA_CONCURRENCY" ] && export TF_VAR_embedding_lambda_concurrency="$bamboo_EMBEDDING_LAMBDA_CONCURRENCY"
+[ -n "$bamboo_ENRICHMENT_LAMBDA_CONCURRENCY" ] && export TF_VAR_enrichment_lambda_concurrency="$bamboo_ENRICHMENT_LAMBDA_CONCURRENCY"
 
 # Store Langfuse secret in SSM SecureString if provided
 if [ -n "$bamboo_LANGFUSE_SECRET_KEY" ]; then
@@ -105,13 +109,14 @@ terraform apply -no-color -auto-approve \
   -target=aws_ecr_repository.ingest_lambda \
   -target=aws_ecr_repository.embedding_lambda \
   -target=aws_ecr_repository.bootstrap_lambda \
+  -target=aws_ecr_repository.enrichment_lambda \
   -target=aws_ecr_repository.mcp_server
 
 # Step 2: Build and push Docker images
 echo ""
 echo "Building and pushing Docker images..."
 cd ..
-for dockerfile in IngestLambdaDockerfile EmbeddingLambdaDockerfile BootstrapLambdaDockerfile McpServerDockerfile; do
+for dockerfile in IngestLambdaDockerfile EmbeddingLambdaDockerfile EnrichmentLambdaDockerfile BootstrapLambdaDockerfile McpServerDockerfile; do
     echo ""
     echo ">>> Building $dockerfile"
     ./"$SCRIPTS_DIR"/docker-build.sh "$dockerfile" "$ENVIRONMENT" "$IMAGE_TAG"

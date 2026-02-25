@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.discover_data.models.extraction import ParsedSpatialExtraction
+from models.tools.discover_data import ParsedSpatialExtraction
 from tools.discover_data.utils import extract_spatial_constraint
 
 
@@ -59,7 +59,7 @@ class TestExtractSpatialWithLLM:
     def test_client_init_error_propagates(self):
         """Client initialization errors should propagate."""
         with patch(
-            "tools.discover_data.utils.extract_spatial_constraint.instructor.from_provider"
+            "tools.discover_data.utils.llm_extraction.instructor.from_provider"
         ) as mock_instructor:
             mock_instructor.side_effect = ConnectionError("Cannot connect to Bedrock")
 
@@ -187,7 +187,7 @@ class TestExtractSpatialConstraintWrapper:
 
             assert result.location == "Test Location"
             assert result.wkt_geometry is None
-            assert result.reasoning == "Extracted"
+            assert result.reasoning == "Unable to resolve location to a geographic area."
 
     def test_geocoding_empty_geometry_validation_error(self):
         """When geocoding returns None (e.g., validation error), should return location but no geometry."""
@@ -244,7 +244,7 @@ class TestExtractSpatialConstraintWrapper:
 
             assert result.location == "Test Location"
             assert result.wkt_geometry is None
-            assert result.reasoning == "Extracted"
+            assert "unavailable" in result.reasoning.lower()
 
     def test_cache_hit(self):
         """When result is in cache, should not call geocoding."""
@@ -337,7 +337,7 @@ class TestExtractSpatialInitialization:
     def test_instructor_client_initialization_error(self):
         """Instructor client initialization failure should be caught."""
         with patch(
-            "tools.discover_data.utils.extract_spatial_constraint.instructor.from_provider"
+            "tools.discover_data.utils.llm_extraction.instructor.from_provider"
         ) as mock_instructor:
             mock_instructor.side_effect = RuntimeError("Bedrock service unavailable")
 
@@ -348,11 +348,9 @@ class TestExtractSpatialInitialization:
         """When Langfuse is available, errors should be logged via trace_update."""
         with (
             patch(
-                "tools.discover_data.utils.extract_spatial_constraint.instructor.from_provider"
+                "tools.discover_data.utils.llm_extraction.instructor.from_provider"
             ) as mock_instructor,
-            patch(
-                "tools.discover_data.utils.extract_spatial_constraint.trace_update"
-            ) as mock_trace,
+            patch("tools.discover_data.utils.llm_extraction.trace_update") as mock_trace,
         ):
             mock_instructor.side_effect = ValueError("Bedrock error")
 

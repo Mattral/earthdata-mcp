@@ -21,6 +21,7 @@ dependencies = [
     "langfuse==3.10.6",
     "instructor>=1.13.0",
     "jsonschema>=4.17.3",
+    "jsonpath-ng>=1.7.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,7 @@ disable = [
     "fixme",  # TODO comments are acceptable during development
     "no-member",  # False positives with Pydantic FieldInfo and dynamic attributes
     "consider-iterating-dictionary",  # Sometimes explicit .keys() is clearer
+    "duplicate-code",  # Test helpers share intentionally similar scaffolding
 ]
 
 [tool.pylint.design]

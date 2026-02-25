@@ -5,6 +5,7 @@ from util.kms.client import (
     clear_cache,
     lookup_term,
     lookup_terms,
+    warm_scheme,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "clear_cache",
     "lookup_term",
     "lookup_terms",
+    "warm_scheme",
 ]

@@ -101,6 +101,39 @@ resource "aws_ecr_lifecycle_policy" "embedding_lambda" {
   })
 }
 
+resource "aws_ecr_repository" "enrichment_lambda" {
+  name                 = "${var.environment_name}-earthdata-mcp-enrichment"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = false
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.environment_name}-earthdata-mcp-enrichment"
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "enrichment_lambda" {
+  repository = aws_ecr_repository.enrichment_lambda.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep only 5 most recent images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 5
+      }
+      action = {
+        type = "expire"
+      }
+    }]
+  })
+}
+
 resource "aws_ecr_repository" "bootstrap_lambda" {
   name                 = "${var.environment_name}-earthdata-mcp-bootstrap"
   image_tag_mutability = "MUTABLE"
@@ -180,13 +213,16 @@ module "application" {
   cmr_sns_topic_arn = local.cmr_sns_topic_arn
 
   # Database (from remote state)
-  database_secret_arn        = data.terraform_remote_state.database.outputs.secret_arn
-  database_security_group_id = data.terraform_remote_state.database.outputs.security_group_id
+  database_secret_arn              = data.terraform_remote_state.database.outputs.secret_arn
+  database_security_group_id       = data.terraform_remote_state.database.outputs.security_group_id
+  database_proxy_endpoint          = data.terraform_remote_state.database.outputs.proxy_endpoint
+  database_proxy_security_group_id = data.terraform_remote_state.database.outputs.proxy_security_group_id
 
   # Lambda container images
   ingest_lambda_image    = "${aws_ecr_repository.ingest_lambda.repository_url}:${var.image_tag}"
   embedding_lambda_image = "${aws_ecr_repository.embedding_lambda.repository_url}:${var.image_tag}"
-  bootstrap_lambda_image = "${aws_ecr_repository.bootstrap_lambda.repository_url}:${var.image_tag}"
+  bootstrap_lambda_image   = "${aws_ecr_repository.bootstrap_lambda.repository_url}:${var.image_tag}"
+  enrichment_lambda_image  = "${aws_ecr_repository.enrichment_lambda.repository_url}:${var.image_tag}"
 
   # Configuration
   cmr_url            = var.cmr_url
@@ -199,8 +235,10 @@ module "application" {
   ingest_lambda_concurrency    = var.ingest_lambda_concurrency
   embedding_lambda_timeout     = var.embedding_lambda_timeout
   embedding_lambda_memory      = var.embedding_lambda_memory
-  embedding_lambda_concurrency = var.embedding_lambda_concurrency
-  bootstrap_lambda_timeout     = var.bootstrap_lambda_timeout
+  embedding_lambda_concurrency   = var.embedding_lambda_concurrency
+  enrichment_lambda_concurrency  = var.enrichment_lambda_concurrency
+  bootstrap_lambda_concurrency   = var.bootstrap_lambda_concurrency
+  bootstrap_lambda_timeout       = var.bootstrap_lambda_timeout
   bootstrap_lambda_memory      = var.bootstrap_lambda_memory
 
   # Langfuse
@@ -225,10 +263,13 @@ module "application" {
   # Geometry simplification
   simplify_geom_max_point = var.simplify_geom_max_point
 
+  # Granule validation
+  granule_validation_max_workers = var.granule_validation_max_workers
+
   tags = var.tags
 }
 
-# Allow embedding lambda to connect to database
+# Allow embedding lambda to connect to database (direct)
 resource "aws_security_group_rule" "lambda_to_database" {
   type                     = "ingress"
   from_port                = 5432
@@ -239,7 +280,18 @@ resource "aws_security_group_rule" "lambda_to_database" {
   description              = "PostgreSQL from embedding lambda"
 }
 
-# Allow MCP server to connect to database
+# Allow enrichment lambda to connect to database (direct)
+resource "aws_security_group_rule" "enrichment_to_database" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = module.application.enrichment_lambda_security_group_id
+  security_group_id        = data.terraform_remote_state.database.outputs.security_group_id
+  description              = "PostgreSQL from enrichment lambda"
+}
+
+# Allow MCP server to connect to database (direct)
 resource "aws_security_group_rule" "mcp_server_to_database" {
   type                     = "ingress"
   from_port                = 5432
@@ -247,6 +299,39 @@ resource "aws_security_group_rule" "mcp_server_to_database" {
   protocol                 = "tcp"
   source_security_group_id = module.application.mcp_server_security_group_id
   security_group_id        = data.terraform_remote_state.database.outputs.security_group_id
+  description              = "PostgreSQL from MCP server"
+}
+
+# Allow embedding lambda to connect to RDS Proxy
+resource "aws_security_group_rule" "lambda_to_proxy" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = module.application.embedding_lambda_security_group_id
+  security_group_id        = data.terraform_remote_state.database.outputs.proxy_security_group_id
+  description              = "PostgreSQL from embedding lambda"
+}
+
+# Allow enrichment lambda to connect to RDS Proxy
+resource "aws_security_group_rule" "enrichment_to_proxy" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = module.application.enrichment_lambda_security_group_id
+  security_group_id        = data.terraform_remote_state.database.outputs.proxy_security_group_id
+  description              = "PostgreSQL from enrichment lambda"
+}
+
+# Allow MCP server to connect to RDS Proxy
+resource "aws_security_group_rule" "mcp_server_to_proxy" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = module.application.mcp_server_security_group_id
+  security_group_id        = data.terraform_remote_state.database.outputs.proxy_security_group_id
   description              = "PostgreSQL from MCP server"
 }
 

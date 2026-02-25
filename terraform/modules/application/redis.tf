@@ -36,18 +36,6 @@ resource "aws_security_group" "redis" {
   description = "Security group for earthdata-mcp Redis cache"
   vpc_id      = var.vpc_id
 
-  # Allow access from embedding Lambda, enrichment Lambda, and MCP server
-  ingress {
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [
-      aws_security_group.embedding_lambda.id,
-      aws_security_group.mcp_server.id,
-    ]
-    description     = "Redis from embedding lambda, enrichment lambda, and MCP server"
-  }
-
   egress {
     from_port   = 0
     to_port     = 0
@@ -58,6 +46,27 @@ resource "aws_security_group" "redis" {
   tags = merge(var.tags, {
     Name = "${var.environment_name}-earthdata-mcp-redis"
   })
+}
+
+# Ingress rules as standalone resources so each service manages its own access
+resource "aws_security_group_rule" "redis_from_embedding" {
+  type                     = "ingress"
+  from_port                = 6379
+  to_port                  = 6379
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.embedding_lambda.id
+  security_group_id        = aws_security_group.redis.id
+  description              = "Redis from embedding lambda"
+}
+
+resource "aws_security_group_rule" "redis_from_mcp" {
+  type                     = "ingress"
+  from_port                = 6379
+  to_port                  = 6379
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.mcp_server.id
+  security_group_id        = aws_security_group.redis.id
+  description              = "Redis from MCP server"
 }
 
 # ElastiCache subnet group

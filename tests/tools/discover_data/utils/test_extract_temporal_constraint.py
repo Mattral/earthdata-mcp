@@ -78,7 +78,7 @@ class TestExtractTemporalInitialization:
     def test_instructor_client_initialization_error(self):
         """Instructor client initialization failure should be caught."""
         with patch(
-            "tools.discover_data.utils.extract_temporal_constraint.instructor.from_provider"
+            "tools.discover_data.utils.llm_extraction.instructor.from_provider"
         ) as mock_instructor:
             mock_instructor.side_effect = RuntimeError("Bedrock service unavailable")
 
@@ -89,11 +89,9 @@ class TestExtractTemporalInitialization:
         """When Langfuse is available, errors should be logged via trace_update."""
         with (
             patch(
-                "tools.discover_data.utils.extract_temporal_constraint.instructor.from_provider"
+                "tools.discover_data.utils.llm_extraction.instructor.from_provider"
             ) as mock_instructor,
-            patch(
-                "tools.discover_data.utils.extract_temporal_constraint.trace_update"
-            ) as mock_trace,
+            patch("tools.discover_data.utils.llm_extraction.trace_update") as mock_trace,
         ):
             mock_instructor.side_effect = ValueError("Bedrock error")
 
@@ -107,9 +105,7 @@ class TestExtractTemporalInitialization:
         _, mock_client, _ = mock_temporal_llm_dependencies
         mock_client.create.side_effect = ValueError("LLM API failed")
 
-        with patch(
-            "tools.discover_data.utils.extract_temporal_constraint.trace_update"
-        ) as mock_trace:
+        with patch("tools.discover_data.utils.llm_extraction.trace_update") as mock_trace:
             with pytest.raises(RuntimeError, match="Failed to extract temporal ranges"):
                 extract_temporal_constraint.extract_temporal_constraint("test query")
 

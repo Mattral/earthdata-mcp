@@ -19,7 +19,8 @@ from shapely import make_valid, orient_polygons
 
 logger = logging.getLogger(__name__)
 
-SIMPLIFY_GEOM_MAX_POINT = int(os.getenv("SIMPLIFY_GEOM_MAX_POINT", "4900"))
+_simplify_geom_raw = os.environ.get("SIMPLIFY_GEOM_MAX_POINT")
+SIMPLIFY_GEOM_MAX_POINT = int(_simplify_geom_raw) if _simplify_geom_raw else None
 
 
 @observe(name="convert_text_to_geom")
@@ -35,7 +36,9 @@ def convert_text_to_geom(location_query: str) -> str:
 
     Returns:
         str: A geometric representation of the location in WKT format.
-            Returns None if an error occurs during the conversion process.
+
+    Raises:
+        Exception: If geocoding or geometry processing fails.
     """
     try:
         # Initialize BedrockNovaLLM

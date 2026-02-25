@@ -5,9 +5,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from models.tools.discover_data import CollectionMatch
 from tools.discover_data.utils import granule_availability
 from tools.discover_data.utils.granule_availability import GranuleValidationError
-from tools.models.output_model import CollectionMatch
 from util.cmr.client import CMRError, CMRSearchResponse
 
 

@@ -93,6 +93,50 @@ resource "aws_cloudwatch_metric_alarm" "embedding_backlog" {
 }
 
 # =============================================================================
+# Step Function Alarms
+# =============================================================================
+
+# Alarm: Enrichment Step Function execution failures
+resource "aws_cloudwatch_metric_alarm" "enrichment_sfn_failures" {
+  alarm_name          = "${var.environment_name}-earthdata-mcp-enrichment-sfn-failures"
+  alarm_description   = "Enrichment Step Function executions are failing"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ExecutionsFailed"
+  namespace           = "AWS/States"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    StateMachineArn = aws_sfn_state_machine.enrichment.arn
+  }
+
+  tags = var.tags
+}
+
+# Alarm: Enrichment Step Function execution throttles
+resource "aws_cloudwatch_metric_alarm" "enrichment_sfn_throttles" {
+  alarm_name          = "${var.environment_name}-earthdata-mcp-enrichment-sfn-throttles"
+  alarm_description   = "Enrichment Step Function executions are being throttled"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ExecutionThrottled"
+  namespace           = "AWS/States"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 50
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    StateMachineArn = aws_sfn_state_machine.enrichment.arn
+  }
+
+  tags = var.tags
+}
+
+# =============================================================================
 # Lambda Error Alarms
 # =============================================================================
 
@@ -156,6 +200,26 @@ resource "aws_cloudwatch_metric_alarm" "bootstrap_lambda_errors" {
   tags = var.tags
 }
 
+# Alarm: Enrichment Lambda errors
+resource "aws_cloudwatch_metric_alarm" "enrichment_lambda_errors" {
+  alarm_name          = "${var.environment_name}-earthdata-mcp-enrichment-errors"
+  alarm_description   = "Enrichment Lambda invocation errors detected"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 5
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.enrichment.function_name
+  }
+
+  tags = var.tags
+}
+
 # =============================================================================
 # Lambda Throttling Alarms
 # =============================================================================
@@ -175,6 +239,29 @@ resource "aws_cloudwatch_metric_alarm" "ingest_lambda_throttles" {
 
   dimensions = {
     FunctionName = aws_lambda_function.ingest.function_name
+  }
+
+  tags = var.tags
+}
+
+# Alarm: Enrichment Lambda throttled
+# Expected during bootstrap when Step Function fan-out exceeds the
+# concurrency limit. SFN retries handle this gracefully, but sustained
+# throttling indicates enrichment_lambda_concurrency is too low.
+resource "aws_cloudwatch_metric_alarm" "enrichment_lambda_throttles" {
+  alarm_name          = "${var.environment_name}-earthdata-mcp-enrichment-throttles"
+  alarm_description   = "Enrichment Lambda is being throttled"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.enrichment.function_name
   }
 
   tags = var.tags
@@ -241,6 +328,27 @@ resource "aws_cloudwatch_metric_alarm" "embedding_lambda_duration" {
 
   dimensions = {
     FunctionName = aws_lambda_function.embedding.function_name
+  }
+
+  tags = var.tags
+}
+
+# Alarm: Enrichment Lambda duration approaching timeout
+resource "aws_cloudwatch_metric_alarm" "enrichment_lambda_duration" {
+  alarm_name          = "${var.environment_name}-earthdata-mcp-enrichment-duration"
+  alarm_description   = "Enrichment Lambda duration approaching timeout (>80%)"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Average"
+  # Alert when average duration exceeds 80% of 300s timeout
+  threshold           = 240000
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.enrichment.function_name
   }
 
   tags = var.tags

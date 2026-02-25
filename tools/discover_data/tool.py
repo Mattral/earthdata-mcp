@@ -13,6 +13,16 @@ import logging
 
 from langfuse import observe
 
+from models.tools.discover_data import (
+    CollectionMatch,
+    DiscoverDataInput,
+    DiscoverDataOutput,
+    DiscoveryStatus,
+    ExtractedConstraints,
+    SearchContext,
+    SpatialConstraint,
+    TemporalConstraint,
+)
 from tools.discover_data.utils.collection_hydration import hydrate_collections
 from tools.discover_data.utils.collection_scoring import score_and_rank_collections
 from tools.discover_data.utils.constraint_extraction import extract_constraints
@@ -29,14 +39,6 @@ from tools.discover_data.utils.query_expansion import (
     analyze_embedding_results,
     generate_expansion_questions,
     should_expand_query,
-)
-from tools.models.constraints import SpatialConstraint, TemporalConstraint
-from tools.models.input_model import DiscoverDataInput, SearchContext
-from tools.models.output_model import (
-    CollectionMatch,
-    DiscoverDataOutput,
-    DiscoveryStatus,
-    ExtractedConstraints,
 )
 from util.langfuse import trace_update
 
@@ -89,6 +91,7 @@ def discover_data(params: DiscoverDataInput) -> dict:  # pylint: disable=too-man
             temporal_reasoning=temporal.reasoning,
             spatial_location=spatial.location,
             spatial_wkt=spatial.wkt_geometry,
+            spatial_reasoning=spatial.reasoning,
         )
 
         # === PHASE 2: Discovery Search (All Entity Types) ===

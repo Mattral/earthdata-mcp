@@ -57,3 +57,18 @@ output "mcp_server_security_group_id" {
   description = "Security group ID for the MCP server"
   value       = aws_security_group.mcp_server.id
 }
+
+output "enrichment_state_machine_arn" {
+  description = "ARN of the enrichment Step Function state machine"
+  value       = aws_sfn_state_machine.enrichment.arn
+}
+
+output "enrichment_state_machine_name" {
+  description = "Name of the enrichment Step Function state machine"
+  value       = aws_sfn_state_machine.enrichment.name
+}
+
+output "enrichment_lambda_security_group_id" {
+  description = "Security group ID for the enrichment Lambdas"
+  value       = aws_security_group.enrichment_lambda.id
+}

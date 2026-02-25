@@ -52,8 +52,8 @@ def flush_langfuse() -> None:
     try:
         client = get_client()
         client.flush()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to flush Langfuse: %s", e)
 
 
 def initialize_langfuse_client() -> Langfuse | None:

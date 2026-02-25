@@ -15,6 +15,7 @@ RUN uv sync --no-dev --frozen
 # Copy application code
 COPY server.py loader.py ./
 COPY middleware/ middleware/
+COPY models/ models/
 COPY tools/ tools/
 COPY util/ util/
 

@@ -2,7 +2,6 @@
 
 # pylint: disable=no-member  # psycopg3 has type inference issues with pylint
 
-import contextlib
 import json
 import logging
 import os
@@ -44,7 +43,7 @@ def _get_connection_url() -> str:
     # For local testing, allow overriding the host via DB_HOST environment variable
     # Converts: postgresql://user:password@original-host:port/db
     #      to: postgresql://user:password@localhost:port/db
-    db_host = os.getenv("DB_HOST")
+    db_host = os.environ.get("DB_HOST")
     if db_host:
         # Replace the hostname in the connection string
         # Pattern: user:password@host:port -> user:password@new_host:port
@@ -82,10 +81,12 @@ def get_db_connection() -> Any:
     if not _is_connection_healthy(_connection):
         # Close stale connection if it exists
         if _connection is not None:
-            with contextlib.suppress(Exception):
+            try:
                 _connection.close()
+            except Exception as e:
+                logger.debug("Failed to close stale connection: %s", e)
         url = _get_connection_url()
-        _connection = psycopg.connect(url, autocommit=True)
+        _connection = psycopg.connect(url, autocommit=True, sslmode="require")
         register_vector(_connection)
         logger.info("Created new database connection")
     return _connection
