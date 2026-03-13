@@ -128,6 +128,15 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
             tool_entry = manifest.get("entry_function")
             if not tool_name:
                 raise ValueError("manifest.json missing 'name' field")
+            enabled = manifest.get("enabled", True)
+            if not isinstance(enabled, bool):
+                raise ValueError(
+                    "manifest.json 'enabled' field must be a boolean for "
+                    f"tool '{tool_folder.name}'"
+                )
+            if enabled is False:
+                print(f"[SKIP] {tool_folder.name}: Disabled in manifest")
+                continue
 
             # Import the tool module
             module_path = f"{tools_dir.name}.{tool_folder.name}.tool"
