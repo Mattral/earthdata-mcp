@@ -154,6 +154,27 @@ class TemporalCoverage(BaseModel):
     )
 
 
+class ExplorationLink(BaseModel):
+    """A link enabling the user to explore or analyze this collection in an external tool."""
+
+    name: str | None = Field(None, description="Tool display name — use as the link label")
+    url: str | None = Field(
+        None,
+        description=(
+            "URL with known context values already substituted. Use directly to construct an 'Open in X' "
+            "action. If the tool supports query parameters, they will be pre-populated with values from this collection (e.g. concept_id, spatial and temporal constraints). "
+            "Note: spatial constraints are converted to a bounding box for URL parameters, so granule counts "
+            "or results in the linked tool may differ slightly from the counts reported here."
+        ),
+    )
+    topic: str | None = Field(
+        None,
+        description=(
+            "Tool topic (e.g. 'DATA ANALYSIS AND VISUALIZATION', 'DATA DISCOVERY'). Use to group or label exploration links by capability."
+        ),
+    )
+
+
 class CollectionMatch(BaseModel):
     """A matched collection with metadata and relevance info."""
 
@@ -198,9 +219,19 @@ class CollectionMatch(BaseModel):
         default=False,
         description="Whether the collection is still actively collecting data",
     )
+    short_name: str | None = Field(None, description="Collection short name (e.g. 'TRMM_3B42')")
     granule_count: int | None = Field(
         None,
         description="Number of granules matching spatio-temporal constraints (None if not validated)",
+    )
+    exploration_links: list[ExplorationLink] = Field(
+        default_factory=list,
+        description=(
+            "Links to external tools that can open, visualize, or analyze this collection. "
+            "Each link is pre-populated with known context values. "
+            "Use 'name' as the button label and 'url' as the target. "
+            "Group by 'topic' to present links by capability type."
+        ),
     )
 
 
