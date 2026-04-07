@@ -57,16 +57,13 @@ def test_get_granules_returns_normalized_results(monkeypatch):
 
     output = tool.get_granules(
         collection_concept_id="C123-PROV",
-        page_size=5,
-        search_after="seed-token",
     )
 
     assert captured["concept_type"] == "granule"
     assert captured["search_params"]["collection_concept_id"] == "C123-PROV"
-    assert captured["search_after"] == "seed-token"
+    assert captured["page_size"] == 20
     assert output["status"] == "success"
     assert output["total_hits"] == 1
-    assert output["search_after"] == "next-granule-token"
     assert output["granules"][0]["concept_id"] == "G123-PROV"
     assert output["granules"][0]["collection_concept_id"] == "C123-PROV"
     assert output["granules"][0]["granule_ur"] == "MOD11A1.A2024001.h00v08.061"
@@ -166,36 +163,7 @@ def test_get_granules_returns_error_on_unexpected_failure(monkeypatch):
     output = tool.get_granules(collection_concept_id="C123-PROV")
 
     assert output["status"] == "error"
-    assert output["error_message"] == "unexpected granule failure"
-
-
-def test_get_granules_accepts_string_page_size(monkeypatch):
-    """Numeric string page_size should be accepted and coerced before CMR call."""
-    tool = _load_tool()
-    page = CMRSearchResponse(items=[], total_hits=0, took_ms=3, search_after=None, page_size=0)
-
-    captured = {}
-
-    def fake_search_cmr(**kwargs):
-        captured.update(kwargs)
-        yield page
-
-    monkeypatch.setattr(tool, "search_cmr", fake_search_cmr)
-
-    output = tool.get_granules(collection_concept_id="C123-PROV", page_size="10")
-
-    assert captured["page_size"] == 10
-    assert output["status"] == "no_results"
-
-
-def test_get_granules_returns_error_on_invalid_page_size():
-    """Invalid page_size should return a structured tool error."""
-    tool = _load_tool()
-
-    output = tool.get_granules(collection_concept_id="C123-PROV", page_size="not-a-number")
-
-    assert output["status"] == "error"
-    assert "page_size" in output["error_message"]
+    assert output["error_message"] == "An unexpected internal error occurred during granule search."
 
 
 def test_get_granules_returns_error_on_invalid_spatial_wkt():
@@ -209,6 +177,108 @@ def test_get_granules_returns_error_on_invalid_spatial_wkt():
 
     assert output["status"] == "error"
     assert "Invalid WKT geometry" in output["error_message"]
+
+
+def test_get_granules_includes_cloud_cover_max_only(monkeypatch):
+    """Setting only cloud_cover_max should produce a CMR cloud_cover param like ',20'."""
+    tool = _load_tool()
+    page = CMRSearchResponse(items=[], total_hits=0, took_ms=5, search_after=None, page_size=0)
+
+    captured = {}
+
+    def fake_search_cmr(**kwargs):
+        captured.update(kwargs)
+        yield page
+
+    monkeypatch.setattr(tool, "search_cmr", fake_search_cmr)
+
+    output = tool.get_granules(
+        collection_concept_id="C123-PROV",
+        cloud_cover_max=20,
+    )
+
+    assert captured["search_params"]["cloud_cover"] == ",20"
+    assert output["status"] == "no_results"
+
+
+def test_get_granules_includes_cloud_cover_min_and_max(monkeypatch):
+    """Setting both cloud_cover_min and cloud_cover_max should produce '10,50'."""
+    tool = _load_tool()
+    page = CMRSearchResponse(items=[], total_hits=0, took_ms=5, search_after=None, page_size=0)
+
+    captured = {}
+
+    def fake_search_cmr(**kwargs):
+        captured.update(kwargs)
+        yield page
+
+    monkeypatch.setattr(tool, "search_cmr", fake_search_cmr)
+
+    output = tool.get_granules(
+        collection_concept_id="C123-PROV",
+        cloud_cover_min=10,
+        cloud_cover_max=50,
+    )
+
+    assert captured["search_params"]["cloud_cover"] == "10,50"
+    assert output["status"] == "no_results"
+
+
+def test_get_granules_includes_cloud_cover_min_only(monkeypatch):
+    """Setting only cloud_cover_min should produce '80,'."""
+    tool = _load_tool()
+    page = CMRSearchResponse(items=[], total_hits=0, took_ms=5, search_after=None, page_size=0)
+
+    captured = {}
+
+    def fake_search_cmr(**kwargs):
+        captured.update(kwargs)
+        yield page
+
+    monkeypatch.setattr(tool, "search_cmr", fake_search_cmr)
+
+    output = tool.get_granules(
+        collection_concept_id="C123-PROV",
+        cloud_cover_min=80,
+    )
+
+    assert captured["search_params"]["cloud_cover"] == "80,"
+    assert output["status"] == "no_results"
+
+
+def test_get_granules_omits_cloud_cover_when_not_provided(monkeypatch):
+    """When neither cloud_cover param is set, no cloud_cover key should appear."""
+    tool = _load_tool()
+    page = CMRSearchResponse(items=[], total_hits=0, took_ms=5, search_after=None, page_size=0)
+
+    captured = {}
+
+    def fake_search_cmr(**kwargs):
+        captured.update(kwargs)
+        yield page
+
+    monkeypatch.setattr(tool, "search_cmr", fake_search_cmr)
+
+    tool.get_granules(collection_concept_id="C123-PROV")
+
+    assert "cloud_cover" not in captured["search_params"]
+
+
+def test_get_granules_rejects_cloud_cover_out_of_range():
+    """Cloud cover values outside 0-100 should produce a validation error."""
+    tool = _load_tool()
+
+    output = tool.get_granules(
+        collection_concept_id="C123-PROV",
+        cloud_cover_max=150,
+    )
+    assert output["status"] == "error"
+
+    output = tool.get_granules(
+        collection_concept_id="C123-PROV",
+        cloud_cover_min=-10,
+    )
+    assert output["status"] == "error"
 
 
 def test_get_granules_calls_trace_update(monkeypatch):

@@ -3,22 +3,30 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from models.tools.cmr_search import SearchStatus
+from models.tools.cmr_search import BaseCmrSearchOutput
 
-QueryParam = Annotated[
+KeywordParam = Annotated[
     str | None,
     Field(
         description=(
-            "Free-text keyword search. Case insensitive. Each space-separated word is matched "
-            "independently; ALL words must appear somewhere in a collection's indexed fields "
+            "Free-text keyword search. Case insensitive. "
+            "IMPORTANT — CMR uses AND logic: each space-separated word is matched independently "
+            "and ALL words must appear somewhere in a collection's indexed fields "
             "(title, summary, short name, GCMD science keywords, platform and instrument names, "
             "project names, processing level, archive centers, additional attributes, etc.). "
+            "Words do NOT need to appear in the same field or as a contiguous phrase. "
+            "Because every word must match, adding more words makes the search STRICTER, not broader — "
+            "the opposite of typical web search engines. Prefer 2–4 precise terms over long queries. "
+            "Example: 'soil moisture' (2 terms, broad) vs 'soil moisture SMAP L3' (4 terms, narrow). "
+            "Phrase search: wrap the entire value in escaped double quotes to require an exact phrase "
+            "(e.g., '\\\"sea surface temperature\\\"'). Only a single phrase is supported; "
+            "you cannot mix a phrase with additional standalone words. "
             "Wildcards supported: * (zero or more chars), ? (any single char). "
             "Use scientific terms: geophysical variable names ('sea surface temperature', "
-            "'soil moisture'), instrument names (MODIS, ASCAT, VIIRS, AIRS, Landsat), or "
-            "platform names (Terra, Aqua, SMAP, Sentinel-1). "
+            "'soil moisture'), instrument names (MODIS, ASCAT, VIIRS, AIRS, Landsat, etc.), or "
+            "platform names (Terra, Aqua, SMAP, Sentinel-1, etc.). "
             "For known product short names use the short_name parameter instead."
         )
     ),
@@ -93,21 +101,6 @@ SpatialWktGeometryParam = Annotated[
     ),
 ]
 
-PageSizeParam = Annotated[
-    int | str,
-    Field(description="Number of results per page (default: 10, max: 2000)."),
-]
-
-SearchAfterParam = Annotated[
-    str | None,
-    Field(
-        description=(
-            "Opaque pagination token from the CMR-Search-After header of a previous response. "
-            "Pass it back unchanged to retrieve the next page of results."
-        )
-    ),
-]
-
 
 class CollectionResult(BaseModel):
     """Minimal collection result for direct CMR-backed discovery."""
@@ -115,8 +108,8 @@ class CollectionResult(BaseModel):
     concept_id: str = Field(..., description="CMR collection concept ID")
     short_name: str | None = Field(None, description="Collection short name")
     version: str | None = Field(None, description="Collection version")
-    title: str = Field(..., description="Collection title")
-    summary: str | None = Field(None, description="Collection summary or abstract")
+    entry_title: str = Field(..., description="Collection title")
+    abstract: str | None = Field(None, description="Collection summary or abstract")
     time_start: datetime | None = Field(None, description="Start of temporal coverage")
     time_end: datetime | None = Field(None, description="End of temporal coverage")
     is_ongoing: bool = Field(default=False, description="Whether the collection is ongoing")
@@ -127,26 +120,20 @@ class CollectionResult(BaseModel):
 class GetCollectionsInput(BaseModel):
     """Input model for get_collections."""
 
-    query: QueryParam = None
+    model_config = ConfigDict(extra="forbid")
+
+    keyword: KeywordParam = None
     concept_id: ConceptIdParam = None
     short_name: ShortNameParam = None
     provider: ProviderParam = None
     temporal_start_date: TemporalStartDateParam = None
     temporal_end_date: TemporalEndDateParam = None
     spatial_wkt_geometry: SpatialWktGeometryParam = None
-    page_size: int = Field(
-        default=10, ge=1, le=2000, description="Results per page (default: 10, max: 2000)."
-    )
-    search_after: SearchAfterParam = None
 
 
-class GetCollectionsOutput(BaseModel):
+class GetCollectionsOutput(BaseCmrSearchOutput):
     """Output model for get_collections."""
 
-    status: SearchStatus = Field(..., description="Status of the collection search")
-    collections: list[CollectionResult] = Field(default_factory=list, description="Collection page")
-    total_hits: int = Field(default=0, description="Total number of matching collections")
-    page_size: int = Field(default=0, description="Number of collections returned in this page")
-    search_after: str | None = Field(None, description="Search-after token for the next page")
-    took_ms: int = Field(default=0, description="CMR processing time in milliseconds")
-    error_message: str | None = Field(None, description="Error details when status is error")
+    collections: list[CollectionResult] = Field(
+        default_factory=list, description="Normalized collection results mapped from UMM-C"
+    )

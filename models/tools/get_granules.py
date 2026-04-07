@@ -3,9 +3,9 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from models.tools.cmr_search import SearchStatus
+from models.tools.cmr_search import BaseCmrSearchOutput
 
 CollectionConceptIdParam = Annotated[
     str,
@@ -55,18 +55,32 @@ SpatialWktGeometryParam = Annotated[
     ),
 ]
 
-PageSizeParam = Annotated[
-    int | str,
-    Field(description="Number of results per page (default: 10, max: 2000)."),
-]
-
-SearchAfterParam = Annotated[
-    str | None,
+CloudCoverMinParam = Annotated[
+    float | None,
     Field(
         description=(
-            "Opaque pagination token from the CMR-Search-After header of a previous response. "
-            "Pass it back unchanged to retrieve the next page of results."
-        )
+            "Minimum cloud cover percentage (0–100, inclusive). "
+            "Use with cloud_cover_max to filter optical/visible imagery granules by cloud cover. "
+            "Only applicable to collections that report cloud cover (e.g., Landsat, MODIS, "
+            "etc). Omit for non-optical data (SAR, altimetry, etc.)."
+        ),
+        ge=0,
+        le=100,
+    ),
+]
+
+CloudCoverMaxParam = Annotated[
+    float | None,
+    Field(
+        description=(
+            "Maximum cloud cover percentage (0–100, inclusive). "
+            "Use with cloud_cover_min to filter optical/visible imagery granules by cloud cover. "
+            "For example, set cloud_cover_max=20 to find mostly clear scenes. "
+            "Only applicable to collections that report cloud cover (e.g., Landsat, MODIS, "
+            "etc). Omit for non-optical data (SAR, altimetry, etc.)."
+        ),
+        ge=0,
+        le=100,
     ),
 ]
 
@@ -80,27 +94,28 @@ class GranuleResult(BaseModel):
     producer_granule_id: str | None = Field(None, description="Producer granule ID")
     time_start: datetime | None = Field(None, description="Granule temporal start")
     time_end: datetime | None = Field(None, description="Granule temporal end")
-    access_urls: list[str] = Field(default_factory=list, description="Actionable data access URLs")
+    access_urls: list[str] = Field(
+        default_factory=list,
+        description="Actionable data access URLs (Note: Access requires Earthdata Login authentication)",
+    )
 
 
 class GetGranulesInput(BaseModel):
     """Input model for get_granules."""
 
+    model_config = ConfigDict(extra="forbid")
+
     collection_concept_id: CollectionConceptIdParam
     temporal_start_date: TemporalStartDateParam = None
     temporal_end_date: TemporalEndDateParam = None
     spatial_wkt_geometry: SpatialWktGeometryParam = None
-    page_size: int = Field(default=10, ge=1, le=2000, description="Results per page")
-    search_after: SearchAfterParam = None
+    cloud_cover_min: CloudCoverMinParam = None
+    cloud_cover_max: CloudCoverMaxParam = None
 
 
-class GetGranulesOutput(BaseModel):
+class GetGranulesOutput(BaseCmrSearchOutput):
     """Output model for get_granules."""
 
-    status: SearchStatus = Field(..., description="Status of the granule search")
-    granules: list[GranuleResult] = Field(default_factory=list, description="Granule page")
-    total_hits: int = Field(default=0, description="Total number of matching granules")
-    page_size: int = Field(default=0, description="Number of granules returned in this page")
-    search_after: str | None = Field(None, description="Search-after token for the next page")
-    took_ms: int = Field(default=0, description="CMR processing time in milliseconds")
-    error_message: str | None = Field(None, description="Error details when status is error")
+    granules: list[GranuleResult] = Field(
+        default_factory=list, description="Normalized granule results mapped from UMM-G (max 20)"
+    )
