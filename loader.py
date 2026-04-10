@@ -21,7 +21,6 @@ class ToolManifest:
     """Handles manifest loading with sensible defaults."""
 
     DEFAULT_MANIFEST = {
-        "name": "unnamed_tool",
         "description": "No description provided.",
         "tags": [],
     }
@@ -36,9 +35,9 @@ class ToolManifest:
                     file_manifest = json.load(f)
                 self.manifest.update(file_manifest)
             except (FileNotFoundError, PermissionError, json.JSONDecodeError) as e:
-                print(f"[WARNING] Could not read manifest.json: {e}")
+                raise ValueError(f"Could not read manifest.json: {e}") from e
         else:
-            print(f"[WARNING] No manifest.json found at {manifest_path}")
+            raise FileNotFoundError(f"No manifest.json found at {manifest_path}")
 
     def get(self, key: str, default=None):
         """Get a manifest value."""
@@ -46,13 +45,22 @@ class ToolManifest:
 
     @property
     def name(self) -> str:
-        """Get the tool name from the manifest."""
+        """Get the tool name from the manifest (required)."""
+        if "name" not in self.manifest:
+            raise ValueError("manifest.json missing required 'name' field")
         return self.manifest["name"]
 
     @property
     def description(self) -> str:
         """Get the tool description from the manifest."""
         return self.manifest["description"]
+
+    @property
+    def version(self) -> str:
+        """Get the tool version from the manifest (required)."""
+        if "version" not in self.manifest:
+            raise ValueError("manifest.json missing required 'version' field")
+        return self.manifest["version"]
 
     @property
     def tags(self) -> list:
@@ -93,6 +101,7 @@ def create_simple_tool(
         tool_kwargs = {
             "name": manifest.name,
             "description": manifest.description,
+            "version": manifest.version,
             "output_schema": output_schema,
         }
         if manifest.annotations:
@@ -117,7 +126,6 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
     """Load all tools from the tools directory."""
     tools_dir = Path(tools_dir)
     loaded = []
-    failed = []
 
     for tool_folder in sorted(tools_dir.iterdir()):
         if not tool_folder.is_dir() or tool_folder.name.startswith((".", "__")):
@@ -125,13 +133,12 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
 
         manifest_path = tool_folder / "manifest.json"
         if not manifest_path.exists():
-            print(f"[SKIP] {tool_folder.name}: No manifest.json")
+            logger.info("[SKIP] %s: No manifest.json", tool_folder.name)
             continue
 
         try:
-            # Load manifest
-            with open(manifest_path, encoding="utf-8") as f:
-                manifest = json.load(f)
+            # Load manifest using ToolManifest
+            manifest = ToolManifest(tool_folder)
 
             tool_name = manifest.get("name")
             tool_entry = manifest.get("entry_function")
@@ -144,7 +151,7 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
                     f"tool '{tool_folder.name}'"
                 )
             if enabled is False:
-                print(f"[SKIP] {tool_folder.name}: Disabled in manifest")
+                logger.info("[SKIP] %s: Disabled in manifest", tool_folder.name)
                 continue
 
             # Import the tool module
@@ -174,7 +181,7 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
                         and attr is not BaseModel
                     ):
                         output_schema = attr.model_json_schema()
-                        print(f"[INFO] Using Pydantic model {attr_name} for {tool_name}")
+                        logger.debug("Using Pydantic model %s for %s", attr_name, tool_name)
                         break
             except (ImportError, AttributeError):
                 # Fall back to JSON schema if output_model.py doesn't exist
@@ -183,26 +190,26 @@ def load_tools_from_directory(mcp, tools_dir="tools"):
                     try:
                         with open(schema_path, encoding="utf-8") as f:
                             output_schema = json.load(f)
-                            print(f"[INFO] Using JSON schema for {tool_name}")
+                            logger.debug("Using JSON schema for %s", tool_name)
                     except Exception as e:
-                        print(f"[WARNING] Could not load output schema for {tool_name}: {e}")
+                        logger.warning("Could not load output schema for %s: %s", tool_name, e)
 
             # Register the tool using create_simple_tool
             register_func = create_simple_tool(tool_folder, tool_func, output_schema)
             register_func(mcp)
 
             loaded.append(tool_name)
-            print(f"[LOAD] ✓ {tool_name}")
+            logger.info("[LOAD] ✓ %s", tool_name)
 
-        except (FileNotFoundError, ValueError, AttributeError, Exception) as e:
-            failed.append(tool_folder.name)
-            print(f"[FAIL] ✗ {tool_folder.name}: {e}")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("[FAIL] ✗ %s: %s", tool_folder.name, e)
+            raise RuntimeError(
+                f"Failed to load tool '{tool_folder.name}' from {manifest_path}"
+            ) from e
 
     # Summary
-    print(f"\n{'=' * 50}")
-    print(f"Loaded: {len(loaded)} tools")
-    if failed:
-        print(f"Failed: {len(failed)} tools: {', '.join(failed)}")
-    print(f"{'=' * 50}\n")
+    logger.info("\n%s", "=" * 50)
+    logger.info("Loaded: %d tools", len(loaded))
+    logger.info("%s\n", "=" * 50)
 
-    return {"loaded": loaded, "failed": failed}
+    return {"loaded": loaded, "failed": []}

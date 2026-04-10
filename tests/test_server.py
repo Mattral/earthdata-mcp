@@ -30,6 +30,32 @@ class TestServerInitialization:
         assert "earthaccess" in server.mcp.instructions
         assert "DISCOVER COLLECTIONS" in server.mcp.instructions
 
+    @patch("importlib.metadata.version")
+    def test_server_version_from_metadata(self, mock_version):
+        """Test that server version is correctly pulled from package metadata."""
+        mock_version.return_value = "1.2.3"
+
+        # Reload module in-place to trigger initialization without breaking patch references
+        importlib.reload(server)
+
+        assert server.server_version == "1.2.3"
+        assert server.mcp.version == "1.2.3"
+        assert server.mcp.name == "earthdata-mcp"
+        mock_version.assert_called_once_with("earthdata-mcp")
+
+    @patch("importlib.metadata.version")
+    def test_server_version_fallback_to_dev(self, mock_version):
+        """Test that server defaults to 'dev' when package is not installed."""
+        mock_version.side_effect = importlib.metadata.PackageNotFoundError()
+
+        # Reload module in-place to trigger initialization without breaking patch references
+        importlib.reload(server)
+
+        assert server.server_version == "dev"
+        assert server.mcp.version == "dev"
+        assert server.mcp.name == "earthdata-mcp"
+        mock_version.assert_called_once_with("earthdata-mcp")
+
     def test_server_load_tools_error_handling(self):
         """Test that server properly logs errors during tool loading."""
         # This test verifies the error handling exists
@@ -38,6 +64,19 @@ class TestServerInitialization:
         # We can verify the logger is configured
         assert server.logger is not None
         assert server.logger.name == "server"
+
+
+class TestHealthEndpoint:
+    """Test the ALB health check endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_health_returns_ok(self):
+        """Health endpoint should return {"earthdata-mcp": {"ok?": True}}."""
+        import json
+
+        response = await server.health(None)
+        assert response.status_code == 200
+        assert json.loads(response.body) == {"earthdata-mcp": {"ok?": True}}
 
 
 class TestMainFunction:
@@ -64,7 +103,7 @@ class TestMainFunction:
         ):
             server.main()
 
-            mock_print.assert_called_once_with("Running MCP over HTTP streaming...")
+            mock_print.assert_called_once_with("Running MCP over Streamable HTTP...")
             # Check that uvicorn was called with correct args (don't check app object identity)
             assert mock_uvicorn.call_count == 1
             call_args = mock_uvicorn.call_args
@@ -72,15 +111,15 @@ class TestMainFunction:
             assert call_args[1]["port"] == 5001
 
     @patch("server.uvicorn.run")
-    def test_main_sse_mode(self, mock_uvicorn):
-        """Test main function in SSE mode."""
+    def test_main_streamable_http_mode(self, mock_uvicorn):
+        """Test main function in streamable-http mode."""
         with (
-            patch.object(sys, "argv", ["server.py", "sse"]),
+            patch.object(sys, "argv", ["server.py", "streamable-http"]),
             patch("builtins.print") as mock_print,
         ):
             server.main()
 
-            mock_print.assert_called_once_with("Running MCP over HTTP streaming...")
+            mock_print.assert_called_once_with("Running MCP over Streamable HTTP...")
             # Check that uvicorn was called with correct args
             assert mock_uvicorn.call_count == 1
             call_args = mock_uvicorn.call_args
@@ -96,7 +135,7 @@ class TestMainFunction:
         ):
             server.main()
 
-            mock_print.assert_called_once_with("Running MCP over HTTP streaming...")
+            mock_print.assert_called_once_with("Running MCP over Streamable HTTP...")
             # Check that uvicorn was called with correct args
             assert mock_uvicorn.call_count == 1
             call_args = mock_uvicorn.call_args
@@ -159,7 +198,7 @@ class TestMainEntryPoint:
 
             # Verify that main() was called (which calls uvicorn.run)
             assert mock_uvicorn.called, "main() should have been executed"
-            mock_print.assert_any_call("Running MCP over HTTP streaming...")
+            mock_print.assert_any_call("Running MCP over Streamable HTTP...")
 
 
 class TestImportTimeErrorHandling:

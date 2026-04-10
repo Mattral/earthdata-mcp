@@ -7,6 +7,10 @@ import pytest
 from util.cmr.search_tools import (
     _count_geometry_points,
     _dedupe_strings,
+    _extract_collection_spatial_resolution,
+    _extract_collection_temporal_resolution,
+    _extract_granule_archive_info,
+    _extract_granule_bounding_box,
     build_spatial_files,
     extract_access_urls,
     extract_granule_temporal_extent,
@@ -227,3 +231,463 @@ def test_format_cloud_cover_range_handles_floats():
 def test_format_cloud_cover_range_renders_whole_floats_as_ints():
     """Cloud cover formatter should render 20.0 as '20', not '20.0'."""
     assert format_cloud_cover_range(0.0, 100.0) == "0,100"
+
+
+# --- _extract_granule_bounding_box tests ---
+
+
+def test_extract_granule_bounding_box_returns_none_if_missing():
+    """Should return None if UMM-G has no SpatialExtent."""
+    assert _extract_granule_bounding_box({}) is None
+
+
+def test_extract_granule_bounding_box_aggregates_multiple_rects():
+    """Should compute the MBR across all valid bounding rectangles."""
+    umm = {
+        "SpatialExtent": {
+            "HorizontalSpatialDomain": {
+                "Geometry": {
+                    "BoundingRectangles": [
+                        {
+                            "WestBoundingCoordinate": -10.0,
+                            "SouthBoundingCoordinate": 20.0,
+                            "EastBoundingCoordinate": -5.0,
+                            "NorthBoundingCoordinate": 30.0,
+                        },
+                        {
+                            "WestBoundingCoordinate": -15.0,
+                            "SouthBoundingCoordinate": 25.0,
+                            "EastBoundingCoordinate": -2.0,
+                            "NorthBoundingCoordinate": 40.0,
+                        },
+                        "invalid-string-ignored",
+                        {
+                            "WestBoundingCoordinate": "not-a-float",
+                            "SouthBoundingCoordinate": 20.0,
+                            "EastBoundingCoordinate": -5.0,
+                            "NorthBoundingCoordinate": 30.0,
+                        },
+                    ]
+                }
+            }
+        }
+    }
+    mbr = _extract_granule_bounding_box(umm)
+    assert mbr == [-15.0, 20.0, -2.0, 40.0]
+
+
+def test_extract_granule_bounding_box_safely_handles_bad_data():
+    """Should safely ignore malformed data types in the spatial tree."""
+    # HorizontalSpatialDomain is a string, not a dict
+    umm = {"SpatialExtent": {"HorizontalSpatialDomain": "invalid"}}
+    assert _extract_granule_bounding_box(umm) is None
+
+    # BoundingRectangles is a dict, not a list
+    umm = {"SpatialExtent": {"HorizontalSpatialDomain": {"Geometry": {"BoundingRectangles": {}}}}}
+    assert _extract_granule_bounding_box(umm) is None
+
+
+# --- Extraction Helper Tests ---
+
+
+def test_extract_collection_temporal_resolution():
+    """Test temporal resolution extraction handles lists and single objects safely."""
+    # Happy path: List of Resolutions
+    assert (
+        _extract_collection_temporal_resolution(
+            {"TemporalExtents": [{"TemporalResolutions": [{"Value": 8, "Unit": "Day"}]}]}
+        )
+        == "8 Day"
+    )
+
+    # Happy path: Single Object Resolution (e.g. HLSL30)
+    assert (
+        _extract_collection_temporal_resolution(
+            {"TemporalExtents": [{"TemporalResolution": {"Value": 1, "Unit": "Month"}}]}
+        )
+        == "1 Month"
+    )
+
+    # Missing data returns None
+    assert _extract_collection_temporal_resolution({}) is None
+
+    # Malformed data (string instead of list) returns None safely
+    assert _extract_collection_temporal_resolution({"TemporalExtents": "Not a list"}) is None
+
+
+def test_extract_collection_spatial_resolution():
+    """Test spatial resolution extraction handles dimensions and missing data safely."""
+    # Happy path: 2D Gridded Resolution
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {
+                            "HorizontalDataResolution": {
+                                "GriddedResolutions": [
+                                    {"XDimension": 30, "YDimension": 30, "Unit": "Meters"}
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        == "30x30 Meters"
+    )
+
+    # Happy path: 1D Generic Resolution
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {
+                            "HorizontalDataResolution": {
+                                "GenericResolutions": {"XDimension": 1, "Unit": "Kilometers"}
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        == "1 Kilometers"
+    )
+
+    # Missing data returns None
+    assert _extract_collection_spatial_resolution({}) is None
+
+    # Malformed data (string instead of dict) returns None safely
+    assert _extract_collection_spatial_resolution({"SpatialExtent": "Not a dict"}) is None
+
+
+def test_extract_granule_archive_info():
+    """Test granule archive extraction handles size conversion and format safely."""
+    # Happy path: Normal byte size
+    size_mb, fmt = _extract_granule_archive_info(
+        {
+            "DataGranule": {
+                "ArchiveAndDistributionInformation": [
+                    {"SizeInBytes": 1048576, "Format": "NetCDF-4"}
+                ]
+            }
+        }
+    )
+    assert size_mb == 1.0
+    assert fmt == "NetCDF-4"
+
+    # Missing data returns (None, None)
+    assert _extract_granule_archive_info({}) == (None, None)
+
+    # Malformed data (string instead of float) parses safely if possible
+    size_mb, _ = _extract_granule_archive_info(
+        {"DataGranule": {"ArchiveAndDistributionInformation": [{"SizeInBytes": "2097152"}]}}
+    )
+    assert size_mb == 2.0
+
+
+def test_extract_granule_bounding_box():
+    """Test granule MBR extraction handles floats and malformed geometry safely."""
+    # Happy path: Valid coordinates
+    assert _extract_granule_bounding_box(
+        {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "BoundingRectangles": [
+                            {
+                                "WestBoundingCoordinate": -120.0,
+                                "SouthBoundingCoordinate": 30.5,
+                                "EastBoundingCoordinate": -110.0,
+                                "NorthBoundingCoordinate": 40.5,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    ) == [-120.0, 30.5, -110.0, 40.5]
+
+    # Missing data returns None
+    assert _extract_granule_bounding_box({}) is None
+
+    # Malformed data (string instead of float array) safely ignored
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "Geometry": {"BoundingRectangles": ["Not a dictionary"]}
+                    }
+                }
+            }
+        )
+        is None
+    )
+
+    # Malformed nested objects return None cleanly
+    assert _extract_granule_bounding_box({"SpatialExtent": "Not a dict"}) is None
+    assert (
+        _extract_granule_bounding_box({"SpatialExtent": {"HorizontalSpatialDomain": "Not a dict"}})
+        is None
+    )
+    assert (
+        _extract_granule_bounding_box(
+            {"SpatialExtent": {"HorizontalSpatialDomain": {"Geometry": "Not a dict"}}}
+        )
+        is None
+    )
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {"Geometry": {"BoundingRectangles": "Not a list"}}
+                }
+            }
+        )
+        is None
+    )
+
+    # Missing keys in dictionary fail safely
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "Geometry": {"BoundingRectangles": [{"WestBoundingCoordinate": 1.0}]}
+                    }
+                }
+            }
+        )
+        is None
+    )
+
+    # Unparseable float string in dictionary fails safely
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "Geometry": {
+                            "BoundingRectangles": [
+                                {
+                                    "WestBoundingCoordinate": "invalid",
+                                    "SouthBoundingCoordinate": 2.0,
+                                    "EastBoundingCoordinate": 3.0,
+                                    "NorthBoundingCoordinate": 4.0,
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+        is None
+    )
+
+
+def test_extract_missing_fields_safely():
+    """Test that missing internal dictionary fields safely continue loops without error."""
+    # Missing Value or Unit skips cleanly
+    assert (
+        _extract_collection_temporal_resolution(
+            {"TemporalExtents": [{"TemporalResolutions": [{"Unit": "Day"}, {"Value": 8}]}]}
+        )
+        is None
+    )
+
+    # Malformed array elements (string instead of dict) skip cleanly
+    assert (
+        _extract_collection_temporal_resolution(
+            {"TemporalExtents": ["Not a dict", {"TemporalResolutions": ["Not a dict"]}]}
+        )
+        is None
+    )
+
+    # Malformed resolution lists skip cleanly
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {
+                            "HorizontalDataResolution": {"GriddedResolutions": ["Not a dict", []]}
+                        }
+                    }
+                }
+            }
+        )
+        is None
+    )
+
+    # Malformed archive info elements skip cleanly
+    assert _extract_granule_archive_info(
+        {"DataGranule": {"ArchiveAndDistributionInformation": ["Not a dict"]}}
+    ) == (None, None)
+
+    # Malformed bounding boxes skip cleanly
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {"Geometry": {"BoundingRectangles": ["Not a dict"]}}
+                }
+            }
+        )
+        is None
+    )
+
+    # Missing unit skips cleanly
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {
+                            "HorizontalDataResolution": {
+                                "GriddedResolutions": [{"XDimension": 30, "YDimension": 30}]
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        is None
+    )
+
+    # Missing size falls back to None size safely
+    size_mb, fmt = _extract_granule_archive_info(
+        {"DataGranule": {"ArchiveAndDistributionInformation": [{"Format": "NetCDF-4"}]}}
+    )
+    assert size_mb is None
+    assert fmt == "NetCDF-4"
+
+    # Guard tests for _extract_collection_temporal_resolution
+    assert _extract_collection_temporal_resolution({"TemporalExtents": ["not_a_dict"]}) is None
+    assert (
+        _extract_collection_temporal_resolution(
+            {"TemporalExtents": [{"TemporalResolutions": ["not_a_dict"]}]}
+        )
+        is None
+    )
+    assert (
+        _extract_collection_temporal_resolution(
+            {"TemporalExtents": [{"TemporalResolution": "not_a_dict"}]}
+        )
+        is None
+    )
+
+    # Guard tests for _extract_collection_spatial_resolution
+    assert _extract_collection_spatial_resolution({"SpatialExtent": "not_a_dict"}) is None
+    assert (
+        _extract_collection_spatial_resolution(
+            {"SpatialExtent": {"HorizontalSpatialDomain": "not_a_dict"}}
+        )
+        is None
+    )
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {"ResolutionAndCoordinateSystem": "not_a_dict"}
+                }
+            }
+        )
+        is None
+    )
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {"HorizontalDataResolution": "not_a_dict"}
+                    }
+                }
+            }
+        )
+        is None
+    )
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {
+                            "HorizontalDataResolution": {"GriddedResolutions": "not_a_list"}
+                        }
+                    }
+                }
+            }
+        )
+        is None
+    )
+    assert (
+        _extract_collection_spatial_resolution(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "ResolutionAndCoordinateSystem": {
+                            "HorizontalDataResolution": {"GriddedResolutions": ["not_a_dict"]}
+                        }
+                    }
+                }
+            }
+        )
+        is None
+    )
+
+    # Guard tests for _extract_granule_archive_info
+    assert _extract_granule_archive_info({"DataGranule": "not_a_dict"}) == (None, None)
+    assert _extract_granule_archive_info(
+        {"DataGranule": {"ArchiveAndDistributionInformation": "not_a_list"}}
+    ) == (None, None)
+    assert _extract_granule_archive_info(
+        {"DataGranule": {"ArchiveAndDistributionInformation": ["not_a_dict"]}}
+    ) == (None, None)
+
+    # Force ValueError in _extract_granule_archive_info
+    size_mb, fmt = _extract_granule_archive_info(
+        {
+            "DataGranule": {
+                "ArchiveAndDistributionInformation": [
+                    {"SizeInBytes": "not_a_float", "Format": "HDF5"}
+                ]
+            }
+        }
+    )
+    assert size_mb is None
+    assert fmt == "HDF5"
+
+    # Guard tests for _extract_granule_bounding_box
+    assert _extract_granule_bounding_box({"SpatialExtent": "not_a_dict"}) is None
+    assert (
+        _extract_granule_bounding_box({"SpatialExtent": {"HorizontalSpatialDomain": "not_a_dict"}})
+        is None
+    )
+    assert (
+        _extract_granule_bounding_box(
+            {"SpatialExtent": {"HorizontalSpatialDomain": {"Geometry": "not_a_dict"}}}
+        )
+        is None
+    )
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {"Geometry": {"BoundingRectangles": "not_a_list"}}
+                }
+            }
+        )
+        is None
+    )
+    assert (
+        _extract_granule_bounding_box(
+            {
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {"Geometry": {"BoundingRectangles": ["not_a_dict"]}}
+                }
+            }
+        )
+        is None
+    )

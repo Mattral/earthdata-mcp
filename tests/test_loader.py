@@ -1,6 +1,7 @@
 """Tests for the loader.py module."""
 
 import json
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,6 +16,7 @@ class TestToolManifest:
         """Test loading a valid manifest.json file."""
         manifest_data = {
             "name": "test_tool",
+            "version": "1.0.0",
             "description": "A test tool",
             "tags": ["test", "example"],
         }
@@ -24,36 +26,26 @@ class TestToolManifest:
         manifest = ToolManifest(tmp_path)
 
         assert manifest.name == "test_tool"
+        assert manifest.version == "1.0.0"
         assert manifest.description == "A test tool"
         assert manifest.tags == ["test", "example"]
 
-    def test_manifest_without_file(self, tmp_path, capsys):
+    def test_manifest_without_file(self, tmp_path):
         """Test behavior when manifest.json doesn't exist."""
-        manifest = ToolManifest(tmp_path)
+        with pytest.raises(FileNotFoundError, match="No manifest.json found"):
+            ToolManifest(tmp_path)
 
-        assert manifest.name == "unnamed_tool"
-        assert manifest.description == "No description provided."
-        assert manifest.tags == []
-
-        captured = capsys.readouterr()
-        assert "No manifest.json found" in captured.out
-
-    def test_manifest_with_invalid_json(self, tmp_path, capsys):
+    def test_manifest_with_invalid_json(self, tmp_path):
         """Test behavior when manifest.json contains invalid JSON."""
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text("{invalid json}")
 
-        manifest = ToolManifest(tmp_path)
-
-        assert manifest.name == "unnamed_tool"
-        assert manifest.description == "No description provided."
-
-        captured = capsys.readouterr()
-        assert "Could not read manifest.json" in captured.out
+        with pytest.raises(ValueError, match="Could not read manifest.json"):
+            ToolManifest(tmp_path)
 
     def test_manifest_get_method(self, tmp_path):
         """Test the get method of ToolManifest."""
-        manifest_data = {"name": "test_tool", "custom_field": "custom_value"}
+        manifest_data = {"name": "test_tool", "version": "1.0.0", "custom_field": "custom_value"}
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data))
 
@@ -63,10 +55,23 @@ class TestToolManifest:
         assert manifest.get("custom_field") == "custom_value"
         assert manifest.get("nonexistent", "default") == "default"
 
+    def test_manifest_missing_required_keys(self, tmp_path):
+        """Test behavior when a valid manifest.json is missing required keys."""
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps({"description": "No name or version!"}))
+
+        manifest = ToolManifest(tmp_path)
+
+        with pytest.raises(ValueError, match="missing required 'name' field"):
+            _ = manifest.name
+        with pytest.raises(ValueError, match="missing required 'version' field"):
+            _ = manifest.version
+
     def test_manifest_annotations_from_nested_object(self, tmp_path):
         """Test loading annotations from the nested annotations object."""
         manifest_data = {
             "name": "test_tool",
+            "version": "1.0.0",
             "annotations": {
                 "readOnlyHint": True,
                 "destructiveHint": False,
@@ -86,6 +91,7 @@ class TestToolManifest:
         """Test root-level annotation hint keys are ignored."""
         manifest_data = {
             "name": "test_tool",
+            "version": "1.0.0",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -104,7 +110,7 @@ class TestCreateSimpleTool:
 
     def test_create_simple_tool_basic(self, tmp_path):
         """Test creating a simple tool with basic configuration."""
-        manifest_data = {"name": "test_tool", "description": "A test tool"}
+        manifest_data = {"name": "test_tool", "version": "1.0.0", "description": "A test tool"}
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data))
 
@@ -125,11 +131,12 @@ class TestCreateSimpleTool:
         call_kwargs = mock_mcp.tool.call_args[1]
         assert call_kwargs["name"] == "test_tool"
         assert call_kwargs["description"] == "A test tool"
+        assert call_kwargs["version"] == manifest_data["version"]
         assert call_kwargs["output_schema"] is None
 
     def test_create_simple_tool_with_output_schema(self, tmp_path):
         """Test creating a tool with output schema."""
-        manifest_data = {"name": "test_tool", "description": "Test"}
+        manifest_data = {"name": "test_tool", "version": "1.0.0", "description": "Test"}
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data))
 
@@ -147,11 +154,13 @@ class TestCreateSimpleTool:
 
         call_kwargs = mock_mcp.tool.call_args[1]
         assert call_kwargs["output_schema"] == output_schema
+        assert call_kwargs["version"] == manifest_data["version"]
 
     def test_create_simple_tool_passes_annotations(self, tmp_path):
         """Test creating a tool forwards manifest annotations into mcp.tool."""
         manifest_data = {
             "name": "test_tool",
+            "version": "1.0.0",
             "description": "Test",
             "annotations": {
                 "readOnlyHint": True,
@@ -182,7 +191,7 @@ class TestCreateSimpleTool:
     @patch("loader.flush_langfuse")
     async def test_create_simple_tool_wrapper_execution(self, mock_flush, tmp_path):
         """Test that the wrapper function executes and returns results correctly."""
-        manifest_data = {"name": "test_tool", "description": "Test"}
+        manifest_data = {"name": "test_tool", "version": "1.0.0", "description": "Test"}
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data))
 
@@ -198,6 +207,7 @@ class TestCreateSimpleTool:
             def decorator(func):
                 nonlocal wrapper_func
                 wrapper_func = func
+                # Mock the @observe decorator to return the function unchanged
                 return func
 
             return decorator
@@ -207,6 +217,8 @@ class TestCreateSimpleTool:
 
         register_func(mock_mcp)
 
+        # In fastmcp v3, the tool decorator doesn't return the wrapper,
+        # but our loader specifically wraps the tool_func inside wrapper()
         # pylint: disable=not-callable
         result = await wrapper_func(keyword="test")
         assert result == {"result": "Processed test"}
@@ -217,8 +229,9 @@ class TestLoadToolsFromDirectory:
     """Test cases for load_tools_from_directory function."""
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_success(self, mock_import, tmp_path, capsys):
+    def test_load_tools_success(self, mock_import, tmp_path, caplog):
         """Test successfully loading tools from directory."""
+        caplog.set_level(logging.DEBUG)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
 
@@ -228,6 +241,7 @@ class TestLoadToolsFromDirectory:
 
         manifest = {
             "name": "test_tool",
+            "version": "1.0.0",
             "description": "Test tool",
             "entry_function": "register",
         }
@@ -258,8 +272,7 @@ class TestLoadToolsFromDirectory:
         assert mock_import.call_count == 2
         mock_import.assert_any_call("tools.test_tool.tool")
 
-        captured = capsys.readouterr()
-        assert "✓ test_tool" in captured.out
+        assert "✓ test_tool" in caplog.text
 
     def test_load_tools_skip_hidden_dirs(self, tmp_path):
         """Test that hidden directories are skipped."""
@@ -269,7 +282,9 @@ class TestLoadToolsFromDirectory:
         # Create hidden directory
         hidden_dir = tools_dir / ".hidden"
         hidden_dir.mkdir()
-        (hidden_dir / "manifest.json").write_text(json.dumps({"name": "hidden"}))
+        (hidden_dir / "manifest.json").write_text(
+            json.dumps({"name": "hidden", "version": "1.0.0"})
+        )
 
         mock_mcp = Mock()
         result = load_tools_from_directory(mock_mcp, str(tools_dir))
@@ -277,8 +292,9 @@ class TestLoadToolsFromDirectory:
         assert len(result["loaded"]) == 0
         assert len(result["failed"]) == 0
 
-    def test_load_tools_missing_manifest(self, tmp_path, capsys):
+    def test_load_tools_missing_manifest(self, tmp_path, caplog):
         """Test behavior when tool directory has no manifest.json."""
+        caplog.set_level(logging.DEBUG)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
 
@@ -288,13 +304,13 @@ class TestLoadToolsFromDirectory:
         mock_mcp = Mock()
         result = load_tools_from_directory(mock_mcp, str(tools_dir))
 
-        captured = capsys.readouterr()
-        assert "[SKIP] no_manifest_tool: No manifest.json" in captured.out
+        assert "[SKIP] no_manifest_tool: No manifest.json" in caplog.text
         assert len(result["loaded"]) == 0
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_skips_disabled_manifest(self, mock_import, tmp_path, capsys):
+    def test_load_tools_skips_disabled_manifest(self, mock_import, tmp_path, caplog):
         """Tools with enabled=false in manifest should be skipped."""
+        caplog.set_level(logging.DEBUG)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
 
@@ -304,6 +320,7 @@ class TestLoadToolsFromDirectory:
             json.dumps(
                 {
                     "name": "disabled_tool",
+                    "version": "1.0.0",
                     "entry_function": "register",
                     "enabled": False,
                 }
@@ -316,11 +333,11 @@ class TestLoadToolsFromDirectory:
         assert not result["loaded"]
         assert not result["failed"]
         mock_import.assert_not_called()
-        captured = capsys.readouterr()
-        assert "[SKIP] disabled_tool: Disabled in manifest" in captured.out
+
+        assert "[SKIP] disabled_tool: Disabled in manifest" in caplog.text
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_fails_on_non_boolean_enabled(self, mock_import, tmp_path, capsys):
+    def test_load_tools_fails_on_non_boolean_enabled(self, mock_import, tmp_path, caplog):
         """Tools with non-boolean enabled should fail fast with a clear error."""
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
@@ -331,6 +348,7 @@ class TestLoadToolsFromDirectory:
             json.dumps(
                 {
                     "name": "bad_enabled_tool",
+                    "version": "1.0.0",
                     "entry_function": "register",
                     "enabled": "false",
                 }
@@ -338,17 +356,14 @@ class TestLoadToolsFromDirectory:
         )
 
         mock_mcp = Mock()
-        result = load_tools_from_directory(mock_mcp, str(tools_dir))
+        with pytest.raises(RuntimeError, match="Failed to load tool 'bad_enabled_tool'"):
+            load_tools_from_directory(mock_mcp, str(tools_dir))
 
-        assert not result["loaded"]
-        assert result["failed"] == ["bad_enabled_tool"]
         mock_import.assert_not_called()
-        captured = capsys.readouterr()
-        assert "'enabled' field must be a boolean" in captured.out
-        assert "bad_enabled_tool" in captured.out
+        assert "'enabled' field must be a boolean" in caplog.text
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_missing_entry_function(self, mock_import, tmp_path, capsys):
+    def test_load_tools_missing_entry_function(self, mock_import, tmp_path, caplog):
         """Test behavior when tool module is missing entry function."""
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
@@ -356,7 +371,7 @@ class TestLoadToolsFromDirectory:
         tool_dir = tools_dir / "broken_tool"
         tool_dir.mkdir()
 
-        manifest = {"name": "broken_tool", "entry_function": "register"}
+        manifest = {"name": "broken_tool", "version": "1.0.0", "entry_function": "register"}
         (tool_dir / "manifest.json").write_text(json.dumps(manifest))
 
         # Mock module without the register function
@@ -364,22 +379,69 @@ class TestLoadToolsFromDirectory:
         mock_import.return_value = mock_module
 
         mock_mcp = Mock()
-        result = load_tools_from_directory(mock_mcp, str(tools_dir))
+        with pytest.raises(RuntimeError, match="Failed to load tool 'broken_tool'"):
+            load_tools_from_directory(mock_mcp, str(tools_dir))
 
-        assert "broken_tool" in result["failed"]
-        captured = capsys.readouterr()
-        assert "✗ broken_tool" in captured.out
+        assert "✗ broken_tool" in caplog.text
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_with_output_schema(self, mock_import, tmp_path, capsys):
+    def test_load_tools_with_pydantic_output_schema(self, mock_import, tmp_path, caplog):
+        """Test loading tool with Pydantic output schema."""
+        caplog.set_level(logging.DEBUG)
+        tools_dir = tmp_path / "tools"
+        tools_dir.mkdir()
+
+        tool_dir = tools_dir / "pydantic_tool"
+        tool_dir.mkdir()
+
+        manifest = {"name": "pydantic_tool", "version": "1.0.0", "entry_function": "register"}
+        (tool_dir / "manifest.json").write_text(json.dumps(manifest))
+
+        mock_tool_module = Mock()
+
+        def mock_register(param: str) -> dict:
+            return {"result": param}
+
+        mock_tool_module.register = mock_register
+
+        # Create a real module-like object to bypass mock's weird dir() behavior
+        class DummyModule:
+            """Dummy module for mocking imports."""
+
+        from pydantic import BaseModel
+
+        class DummyOutput(BaseModel):
+            """Dummy Pydantic output model."""
+
+            result: str
+
+        mock_output_module = DummyModule()
+        mock_output_module.DummyOutput = DummyOutput  # pylint: disable=attribute-defined-outside-init
+
+        mock_import.side_effect = [
+            mock_tool_module,  # First call: tool.py
+            mock_output_module,  # Second call: output_model.py
+        ]
+
+        mock_mcp = Mock()
+        mock_mcp.tool = Mock(return_value=lambda f: f)
+
+        result = load_tools_from_directory(mock_mcp, str(tools_dir))
+
+        assert "pydantic_tool" in result["loaded"]
+        assert "Using Pydantic model DummyOutput for pydantic_tool" in caplog.text
+
+    @patch("loader.importlib.import_module")
+    def test_load_tools_with_output_schema(self, mock_import, tmp_path, caplog):
         """Test loading tool with JSON output schema."""
+        caplog.set_level(logging.DEBUG)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
 
         tool_dir = tools_dir / "schema_tool"
         tool_dir.mkdir()
 
-        manifest = {"name": "schema_tool", "entry_function": "register"}
+        manifest = {"name": "schema_tool", "version": "1.0.0", "entry_function": "register"}
         (tool_dir / "manifest.json").write_text(json.dumps(manifest))
 
         output_schema = {"type": "object"}
@@ -405,13 +467,14 @@ class TestLoadToolsFromDirectory:
         result = load_tools_from_directory(mock_mcp, str(tools_dir))
 
         assert "schema_tool" in result["loaded"]
-        captured = capsys.readouterr()
+
         # This should hit line 159 - the JSON schema loading print statement
-        assert "Using JSON schema for schema_tool" in captured.out
+        assert "Using JSON schema for schema_tool" in caplog.text
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_missing_name_field(self, mock_import, tmp_path, capsys):
+    def test_load_tools_missing_name_field(self, mock_import, tmp_path, caplog):
         """Test behavior when manifest.json is missing the 'name' field."""
+        caplog.set_level(logging.DEBUG)
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
 
@@ -419,20 +482,23 @@ class TestLoadToolsFromDirectory:
         tool_dir.mkdir()
 
         # Manifest without 'name' field
-        manifest = {"description": "Tool without name", "entry_function": "register"}
+        manifest = {
+            "description": "Tool without name",
+            "entry_function": "register",
+            "version": "1.0.0",
+        }
         (tool_dir / "manifest.json").write_text(json.dumps(manifest))
 
         mock_mcp = Mock()
-        result = load_tools_from_directory(mock_mcp, str(tools_dir))
+        with pytest.raises(RuntimeError, match="Failed to load tool 'no_name_tool'"):
+            load_tools_from_directory(mock_mcp, str(tools_dir))
 
-        assert "no_name_tool" in result["failed"]
-        captured = capsys.readouterr()
-        assert "✗ no_name_tool" in captured.out
-        assert "missing 'name' field" in captured.out
+        assert "✗ no_name_tool" in caplog.text
+        assert "missing 'name' field" in caplog.text
         mock_import.assert_not_called()
 
     @patch("loader.importlib.import_module")
-    def test_load_tools_invalid_output_schema(self, mock_import, tmp_path, capsys):
+    def test_load_tools_invalid_output_schema(self, mock_import, tmp_path, caplog):
         """Test behavior when output.json contains invalid JSON."""
         tools_dir = tmp_path / "tools"
         tools_dir.mkdir()
@@ -440,7 +506,7 @@ class TestLoadToolsFromDirectory:
         tool_dir = tools_dir / "bad_schema_tool"
         tool_dir.mkdir()
 
-        manifest = {"name": "bad_schema_tool", "entry_function": "register"}
+        manifest = {"name": "bad_schema_tool", "version": "1.0.0", "entry_function": "register"}
         (tool_dir / "manifest.json").write_text(json.dumps(manifest))
 
         # Create invalid JSON in output.json
@@ -467,5 +533,5 @@ class TestLoadToolsFromDirectory:
 
         # Tool should still load successfully, but warning should be printed
         assert "bad_schema_tool" in result["loaded"]
-        captured = capsys.readouterr()
-        assert "Could not load output schema for bad_schema_tool" in captured.out
+
+        assert "Could not load output schema for bad_schema_tool" in caplog.text
