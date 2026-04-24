@@ -37,3 +37,6 @@ terraform_backend.tf
 
 # Local AI Configuration
 .continue/rules/local/
+
+.claude/
+CLAUDE.md
