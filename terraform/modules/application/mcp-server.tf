@@ -89,8 +89,6 @@ resource "aws_iam_role_policy" "mcp_task" {
           "secretsmanager:GetSecretValue"
         ]
         Resource = [
-          var.database_secret_arn,
-          aws_secretsmanager_secret.redis.arn
         ]
       },
       {
@@ -234,20 +232,11 @@ resource "aws_ecs_task_definition" "mcp" {
           value = var.environment_name
         },
         {
-          name  = "DATABASE_SECRET_ID"
-          value = var.database_secret_arn
-        },
-        {
           name  = "DB_HOST"
-          value = var.database_proxy_endpoint
         },
         {
           name  = "CMR_URL"
           value = var.cmr_url
-        },
-        {
-          name  = "EMBEDDINGS_TABLE"
-          value = var.embeddings_table
         },
         {
           name  = "ASSOCIATIONS_TABLE"
@@ -260,10 +249,6 @@ resource "aws_ecs_task_definition" "mcp" {
         {
           name  = "LANGFUSE_PUBLIC_KEY"
           value = var.langfuse_public_key
-        },
-        {
-          name  = "REDIS_SECRET_ID"
-          value = aws_secretsmanager_secret.redis.arn
         },
         {
           name  = "GEOCODE_INDEX_HOST"

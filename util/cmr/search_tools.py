@@ -11,6 +11,7 @@ from shapely import wkt as shapely_wkt
 from shapely.errors import GEOSException
 from shapely.geometry import mapping
 
+from util.cmr.client import search_cmr
 from util.temporal import extract_temporal_extent, parse_iso_datetime
 
 logger = logging.getLogger(__name__)
@@ -153,15 +154,23 @@ def normalize_collection_item(item: dict[str, Any]) -> dict[str, Any]:
 
     platforms: list[str] = []
     instruments: list[str] = []
-    for platform in umm.get("Platforms") or []:
-        platform_name = platform.get("ShortName")
-        if platform_name:
-            platforms.append(platform_name)
+    umm_platforms = umm.get("Platforms")
+    if isinstance(umm_platforms, list):
+        for platform in umm_platforms:
+            if not isinstance(platform, dict):
+                continue
+            platform_name = platform.get("ShortName")
+            if platform_name:
+                platforms.append(platform_name)
 
-        for instrument in platform.get("Instruments") or []:
-            instrument_name = instrument.get("ShortName")
-            if instrument_name:
-                instruments.append(instrument_name)
+            umm_instruments = platform.get("Instruments")
+            if isinstance(umm_instruments, list):
+                for instrument in umm_instruments:
+                    if not isinstance(instrument, dict):
+                        continue
+                    instrument_name = instrument.get("ShortName")
+                    if instrument_name:
+                        instruments.append(instrument_name)
 
     version = umm.get("Version")
 
@@ -179,6 +188,10 @@ def normalize_collection_item(item: dict[str, Any]) -> dict[str, Any]:
         for url_item in related_list
         if isinstance(url_item, dict) and url_item.get("URL")
     ]
+
+    science_keywords = umm.get("ScienceKeywords")
+    if not isinstance(science_keywords, list):
+        science_keywords = []
 
     return {
         "concept_id": concept_id,
@@ -199,9 +212,14 @@ def normalize_collection_item(item: dict[str, Any]) -> dict[str, Any]:
         else None,
         "doi": umm.get("DOI").get("DOI") if isinstance(umm.get("DOI"), dict) else None,
         "collection_data_type": umm.get("CollectionDataType"),
+        "collection_progress": umm.get("CollectionProgress"),
         "temporal_resolution": _extract_collection_temporal_resolution(umm),
         "spatial_resolution": _extract_collection_spatial_resolution(umm),
         "related_urls": related_urls,
+        "science_keywords": science_keywords,
+        "bounding_box": _extract_granule_bounding_box(umm),
+        "data_centers": _extract_collection_data_centers(umm),
+        "archive_and_distribution_information": _extract_collection_archive_info(umm),
     }
 
 
@@ -242,12 +260,19 @@ def normalize_granule_item(item: dict[str, Any]) -> dict[str, Any]:
         "data_format": data_format,
         "bounding_box": _extract_granule_bounding_box(umm),
         "access_urls": extract_access_urls(umm),
+        "production_date": parse_iso_datetime(data_granule.get("ProductionDateTime", ""))
+        if isinstance(data_granule, dict)
+        else None,
+        "orbit_info": _extract_granule_orbit_info(umm),
+        "additional_attributes": _extract_granule_additional_attributes(umm),
     }
 
 
 def extract_granule_temporal_extent(umm: dict[str, Any]) -> tuple[datetime | None, datetime | None]:
     """Extract temporal bounds from common UMM-G temporal shapes."""
-    temporal_extent = umm.get("TemporalExtent") or {}
+    temporal_extent = umm.get("TemporalExtent")
+    if not isinstance(temporal_extent, dict):
+        temporal_extent = {}
 
     range_date_time = temporal_extent.get("RangeDateTime")
     if isinstance(range_date_time, dict):
@@ -256,10 +281,14 @@ def extract_granule_temporal_extent(umm: dict[str, Any]) -> tuple[datetime | Non
             parse_iso_datetime(range_date_time.get("EndingDateTime", "")),
         )
 
-    range_date_times = temporal_extent.get("RangeDateTimes") or []
+    range_date_times = temporal_extent.get("RangeDateTimes")
+    if not isinstance(range_date_times, list):
+        range_date_times = []
     starts: list[datetime] = []
     ends: list[datetime] = []
     for range_item in range_date_times:
+        if not isinstance(range_item, dict):
+            continue
         if begin := parse_iso_datetime(range_item.get("BeginningDateTime", "")):
             starts.append(begin)
         if end := parse_iso_datetime(range_item.get("EndingDateTime", "")):
@@ -272,7 +301,11 @@ def extract_access_urls(umm: dict[str, Any]) -> list[str]:
     """Extract actionable URLs from OnlineAccessURLs and RelatedUrls."""
     urls: list[str] = []
 
-    for entry in umm.get("OnlineAccessURLs") or []:
+    online_access_urls = umm.get("OnlineAccessURLs")
+    if not isinstance(online_access_urls, list):
+        online_access_urls = []
+
+    for entry in online_access_urls:
         if isinstance(entry, str):
             urls.append(entry)
         elif isinstance(entry, dict):
@@ -280,7 +313,11 @@ def extract_access_urls(umm: dict[str, Any]) -> list[str]:
             if url:
                 urls.append(url)
 
-    for entry in umm.get("RelatedUrls") or []:
+    related_urls = umm.get("RelatedUrls")
+    if not isinstance(related_urls, list):
+        related_urls = []
+
+    for entry in related_urls:
         if not isinstance(entry, dict):
             continue
 
@@ -353,9 +390,81 @@ def normalize_service_item(item: dict[str, Any]) -> dict[str, Any]:
         "related_urls": umm.get("RelatedURLs"),
         "access_constraints": umm.get("AccessConstraints"),
         "use_constraints": umm.get("UseConstraints"),
+        "service_keywords": umm.get("ServiceKeywords"),
         "service_options": umm.get("ServiceOptions"),
+        "service_organizations": [
+            {"roles": org.get("Roles", []), "short_name": org.get("ShortName")}
+            for org in (umm.get("ServiceOrganizations") or [])
+            if isinstance(org, dict)
+        ],
         "operation_metadata": umm.get("OperationMetadata"),
     }
+
+
+def _extract_granule_orbit_info(umm: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract orbit calculated spatial domain records from UMM-G."""
+    domains = umm.get("OrbitCalculatedSpatialDomains")
+    if not isinstance(domains, list):
+        return []
+    result = []
+    for domain in domains:
+        if not isinstance(domain, dict):
+            continue
+        result.append(
+            {
+                "orbit_number": domain.get("OrbitNumber"),
+                "equator_crossing_longitude": domain.get("EquatorCrossingLongitude"),
+                "equator_crossing_date_time": domain.get("EquatorCrossingDateTime"),
+            }
+        )
+    return result
+
+
+def _extract_granule_additional_attributes(umm: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract additional attributes from UMM-G as [{name, values}]."""
+    attrs = umm.get("AdditionalAttributes")
+    if not isinstance(attrs, list):
+        return []
+    result = []
+    for attr in attrs:
+        if not isinstance(attr, dict):
+            continue
+        result.append({"name": attr.get("Name"), "values": attr.get("Values") or []})
+    return result
+
+
+def _extract_collection_data_centers(umm: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract data center role and short name from UMM-C DataCenters[]."""
+    centers = umm.get("DataCenters")
+    if not isinstance(centers, list):
+        return []
+    result = []
+    for center in centers:
+        if not isinstance(center, dict):
+            continue
+        roles = center.get("Roles") or []
+        short_name = center.get("ShortName")
+        role = roles[0] if roles else None
+        result.append({"role": role, "short_name": short_name})
+    return result
+
+
+def _extract_collection_archive_info(umm: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract file format and media type from ArchiveAndDistributionInformation."""
+    adi = umm.get("ArchiveAndDistributionInformation")
+    if not isinstance(adi, dict):
+        return []
+    file_dist = adi.get("FileDistributionInformation")
+    if not isinstance(file_dist, list):
+        return []
+    result = []
+    for entry in file_dist:
+        if not isinstance(entry, dict):
+            continue
+        media = entry.get("Media")
+        media_type = media[0] if isinstance(media, list) and media else None
+        result.append({"format": entry.get("Format"), "media_type": media_type})
+    return result
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:
@@ -598,3 +707,28 @@ def normalize_variable_item(item: dict[str, Any]) -> dict[str, Any]:
         "sampling_identifiers": umm.get("SamplingIdentifiers"),
         "related_urls": umm.get("RelatedURLs"),
     }
+
+
+def fetch_association_ids(
+    collection_concept_id: str,
+    association_key: str,
+) -> list[str] | None:
+    """Look up association IDs for a collection concept.
+
+    Returns:
+        list[str]: association IDs (may be empty if the collection has none)
+        None: collection was not found in CMR
+
+    Raises CMRError, ValueError, TypeError on API/client failure; re-raises unexpected exceptions.
+    """
+    collection_page = next(
+        search_cmr(
+            concept_type="collection",
+            search_params={"concept_id": collection_concept_id},
+            page_size=1,
+        ),
+        None,
+    )
+    if not collection_page or not collection_page.items:
+        return None
+    return collection_page.items[0].get("meta", {}).get("associations", {}).get(association_key, [])
